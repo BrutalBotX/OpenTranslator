@@ -1,0 +1,32 @@
+appId: com.opentranslator.app
+productName: OpenTranslator
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron/*'
+  - '!{electron.vite.config.ts,postcss.config.js,tailwind.config.js,tsconfig*.json}'
+extraResources:
+  - from: backend/
+    to: backend/
+    filter:
+      - '**/*.py'
+      - 'requirements.txt'
+win:
+  target:
+    - nsis
+  artifactName: ${name}-${version}-setup.${ext}
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  target:
+    - dmg
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+  artifactName: ${name}-${version}.${ext}

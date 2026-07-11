@@ -1,0 +1,43 @@
+# Node
+node_modules/
+out/
+dist/
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Data
+data/
+*.db
+*.sqlite
+
+# ChromaDB
+.chromadb/
+.cache/chroma/
+
+# Build
+*.exe
+*.msi
+*.dmg
+release/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db

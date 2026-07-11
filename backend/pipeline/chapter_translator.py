@@ -1,0 +1,378 @@
+import asyncio
+import re
+import time
+from sqlalchemy import select
+
+from backend.db.database import async_session
+from backend.db.models import Segment, Chapter, Novel, QAItem
+from backend.pipeline.context_gatherer import ContextGatherer
+from backend.pipeline.ambiguity_detector import AmbiguityDetector
+from backend.pipeline.translator import Translator
+from backend.db.vector_store import add_to_tm
+from backend.api.settings import get_cached
+from backend.utils.transliteration import transliterate
+
+SEG_PATTERN = re.compile(r'\[SEG (\d+)\]\s*\n(.*?)(?=\[SEG \d+\]|\Z)', re.DOTALL)
+WINDOW_SIZE = 3
+
+_progress: dict[str, dict] = {}
+_cancel_events: dict[str, asyncio.Event] = {}
+
+
+def get_translate_progress(chapter_id: str) -> dict:
+    return _progress.get(chapter_id, {
+        "status": "idle", "current_batch": 0, "total_batches": 0,
+        "llm_status": "", "error": "", "elapsed": 0,
+    })
+
+
+def cancel_translation(chapter_id: str):
+    ev = _cancel_events.get(chapter_id)
+    if ev:
+        ev.set()
+        _progress[chapter_id] = {
+            **_progress.get(chapter_id, {}),
+            "status": "cancelled", "llm_status": "cancelled",
+        }
+
+
+class ChapterTranslator:
+    def __init__(self):
+        self.context_gatherer = ContextGatherer()
+        self.ambiguity_detector = AmbiguityDetector()
+        self.translator = Translator()
+
+    async def translate_chapter(self, chapter_id: str, novel_id: str) -> dict:
+        batch_size = int(get_cached("batch_size", "4"))
+        cancel_ev = asyncio.Event()
+        _cancel_events[chapter_id] = cancel_ev
+
+        async with async_session() as session:
+            chapter = await session.get(Chapter, chapter_id)
+            novel = await session.get(Novel, novel_id)
+            if not chapter or not novel:
+                return {"error": "Chapter or novel not found"}
+
+            result = await session.execute(
+                select(Segment).where(Segment.chapter_id == chapter_id)
+                .order_by(Segment.segment_number)
+            )
+            segments = result.scalars().all()
+
+        total = len(segments)
+        total_qa = 0
+        all_translations = [None] * total
+
+        prefill_count = 0
+        for s in segments:
+            idx = s.segment_number - 1
+            if s.translation:
+                all_translations[idx] = {
+                    "id": s.id, "segment_number": s.segment_number,
+                    "source_text": s.source_text, "translation": s.translation,
+                    "status": s.status or "translated", "has_qa": s.has_qa or False,
+                    "transliteration": transliterate(s.source_text, novel.source_lang),
+                }
+                prefill_count += 1
+
+        pending = [s for s in segments if not s.translation]
+        if not pending:
+            return self._result(all_translations, total, chapter, total_qa)
+
+        novel_context = await self.context_gatherer.gather_async(
+            chapter_id=chapter_id, novel_id=novel_id
+        )
+
+        batches = []
+        for i in range(0, len(pending), batch_size):
+            batch = []
+            for j in range(i, min(i + batch_size, len(pending))):
+                seg = pending[j]
+                batch.append({
+                    "id": seg.id,
+                    "segment_number": seg.segment_number,
+                    "source_text": seg.source_text,
+                })
+            batches.append((pending[i].segment_number - 1, batch))
+
+        total_batches = len(batches)
+        _progress[chapter_id] = {
+            "status": "translating",
+            "current_batch": 0,
+            "total_batches": total_batches,
+            "llm_status": "starting",
+            "error": "",
+            "started_at": time.time(),
+            "prefilled": prefill_count,
+        }
+
+        for batch_index, (batch_start, segs) in enumerate(batches):
+            if cancel_ev.is_set():
+                print(f"[translate_chapter] Cancelled at batch {batch_index + 1}/{total_batches}")
+                for seg_data in segs:
+                    idx = seg_data["segment_number"] - 1
+                    if all_translations[idx] is None:
+                        all_translations[idx] = {
+                            "id": seg_data["id"], "segment_number": seg_data["segment_number"],
+                            "source_text": seg_data["source_text"], "translation": "",
+                            "status": "untouched", "has_qa": False,
+                            "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                        }
+                break
+
+            all_text = " ".join(s["source_text"] for s in segs)
+
+            context = self._build_batch_context(
+                segments=segments, batch_start=batch_start, batch_size=len(segs),
+                novel_context=novel_context,
+            )
+
+            issues = await self.ambiguity_detector.detect_async(
+                text=all_text, context=context, novel_id=novel_id,
+            )
+            if issues:
+                first_seg_id = segs[0]["id"]
+                async with async_session() as sess:
+                    for issue in issues:
+                        sess.add(QAItem(
+                            segment_id=first_seg_id, question_type=issue["type"],
+                            question=issue["question"], context_snippet=issue.get("context", ""),
+                            suggestions=issue.get("suggestions", []),
+                        ))
+                    await sess.commit()
+                total_qa += len(issues)
+
+            _progress[chapter_id].update({
+                "current_batch": batch_index + 1,
+                "llm_status": f"calling LLM (batch {batch_index + 1}/{total_batches})",
+            })
+            print(f"[translate_chapter] Batch {batch_index + 1}/{total_batches} (segs {segments[batch_start].segment_number}-{segments[min(batch_start + len(segs) - 1, len(segments) - 1)].segment_number}) starting...")
+
+            prompt = self.translator.prompt_builder.build_batch_prompt(
+                batch_segments=segs, context=context,
+            )
+
+            batch_timeout = int(get_cached("llm_timeout", "60")) + 10
+            try:
+                async def _do_translate():
+                    if cancel_ev.is_set():
+                        raise asyncio.CancelledError()
+                    return await self.translator.translate(text=prompt, context=context, is_batch=True)
+
+                translated = await asyncio.wait_for(_do_translate(), timeout=batch_timeout)
+            except asyncio.TimeoutError:
+                err_msg = f"Batch {batch_index + 1}/{total_batches} timed out after {batch_timeout}s"
+                print(f"[translate_chapter] {err_msg}, skipping")
+                _progress[chapter_id].update({"llm_status": f"timeout on batch {batch_index + 1}", "error": err_msg})
+                for seg_data in segs:
+                    idx = seg_data["segment_number"] - 1
+                    if all_translations[idx] is None:
+                        all_translations[idx] = {
+                            "id": seg_data["id"], "segment_number": seg_data["segment_number"],
+                            "source_text": seg_data["source_text"], "translation": "",
+                            "status": "needs_review", "has_qa": False,
+                            "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                        }
+                continue
+            except (asyncio.CancelledError, Exception) as e:
+                if isinstance(e, (asyncio.CancelledError)) or cancel_ev.is_set():
+                    print(f"[translate_chapter] Cancelled during batch {batch_index + 1}")
+                    for seg_data in segs:
+                        idx = seg_data["segment_number"] - 1
+                        if all_translations[idx] is None:
+                            all_translations[idx] = {
+                                "id": seg_data["id"], "segment_number": seg_data["segment_number"],
+                                "source_text": seg_data["source_text"], "translation": "",
+                                "status": "untouched", "has_qa": False,
+                                "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                            }
+                    break
+                err_msg = f"Batch {batch_index + 1}/{total_batches} failed: {e}"
+                print(f"[translate_chapter] {err_msg}")
+                _progress[chapter_id].update({"llm_status": f"error on batch {batch_index + 1}", "error": err_msg})
+                for seg_data in segs:
+                    idx = seg_data["segment_number"] - 1
+                    if all_translations[idx] is None:
+                        all_translations[idx] = {
+                            "id": seg_data["id"], "segment_number": seg_data["segment_number"],
+                            "source_text": seg_data["source_text"], "translation": "",
+                            "status": "needs_review", "has_qa": False,
+                            "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                        }
+                continue
+
+            parsed = self._parse_batch_response(translated, segs)
+
+            for seg_data in segs:
+                seg_num = seg_data["segment_number"]
+                translation = parsed.get(seg_num, "")
+                seg_id = seg_data["id"]
+                idx = seg_data["segment_number"] - 1
+
+                async with async_session() as session:
+                    db_seg = await session.get(Segment, seg_id)
+                    if db_seg:
+                        db_seg.translation = translation
+                        db_seg.status = "translated"
+                        await session.commit()
+
+                if translation:
+                    add_to_tm(segment_id=seg_id, source_text=seg_data["source_text"],
+                              target_text=translation, novel_id=novel_id, chapter_id=chapter_id)
+
+                all_translations[idx] = {
+                    "id": seg_id, "segment_number": seg_num,
+                    "source_text": seg_data["source_text"], "translation": translation,
+                    "status": "translated", "has_qa": bool(issues),
+                    "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                }
+
+            translated_count = len([t for t in all_translations if t and t.get("translation")])
+            print(f"[translate_chapter] Batch {batch_index + 1}/{total_batches} done ({translated_count}/{total} translated so far)")
+            _progress[chapter_id].update({"llm_status": "done"})
+
+        is_cancelled = cancel_ev.is_set()
+        _progress[chapter_id].update({
+            "status": "cancelled" if is_cancelled else "done",
+            "llm_status": "cancelled" if is_cancelled else "completed",
+            "elapsed": time.time() - _progress[chapter_id].get("started_at", time.time()),
+        })
+
+        translated_count = len([t for t in all_translations if t and t.get("translation")])
+        print(f"[translate_chapter] {'Cancelled' if is_cancelled else 'Done'}: {translated_count}/{total} segments, {total_qa} QA items in {_progress[chapter_id]['elapsed']:.1f}s")
+
+        if not is_cancelled:
+            async with async_session() as session:
+                db_chapter = await session.get(Chapter, chapter_id)
+                if db_chapter:
+                    db_chapter.translated = True
+                    await session.commit()
+
+        _cancel_events.pop(chapter_id, None)
+
+        return self._result(all_translations, total, chapter, total_qa)
+
+    def _result(self, all_translations, total, chapter, total_qa):
+        return {
+            "segments": [t for t in all_translations if t],
+            "total": total,
+            "chapter_title": chapter.title,
+            "chapter_number": chapter.number,
+            "qa_count": total_qa,
+        }
+
+    async def apply_qa(self, chapter_id: str, novel_id: str) -> dict:
+        batch_size = int(get_cached("batch_size", "4"))
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(Segment).where(Segment.chapter_id == chapter_id)
+                .order_by(Segment.segment_number)
+            )
+            segments = result.scalars().all()
+
+            seg_ids = [s.id for s in segments]
+            qa_result = await session.execute(
+                select(QAItem).where(
+                    QAItem.segment_id.in_(seg_ids),
+                    QAItem.resolved == True,
+                )
+            )
+            qa_items = qa_result.scalars().all()
+
+        if not qa_items:
+            return {"segments": [], "applied": 0}
+
+        novel_context = await self.context_gatherer.gather_async(
+            chapter_id=chapter_id, novel_id=novel_id
+        )
+
+        updated_seg_ids = set(q.segment_id for q in qa_items)
+        target_segs = [s for s in segments if s.id in updated_seg_ids]
+
+        reapplied = []
+        for i in range(0, len(target_segs), batch_size):
+            batch_segs = target_segs[i:i + batch_size]
+            batch_seg_data = [
+                {"id": s.id, "segment_number": s.segment_number, "source_text": s.source_text}
+                for s in batch_segs
+            ]
+
+            batch_start = min(s.segment_number - 1 for s in batch_segs)
+            context = self._build_batch_context(
+                segments=segments,
+                batch_start=batch_start,
+                batch_size=len(batch_segs),
+                novel_context=novel_context,
+            )
+            context["qa_applied"] = True
+
+            prompt = self.translator.prompt_builder.build_batch_prompt(
+                batch_segments=batch_seg_data, context=context,
+            )
+
+            translated = await self.translator.translate(
+                text=prompt, context=context, is_batch=True,
+            )
+            parsed = self._parse_batch_response(translated, batch_seg_data)
+
+            for seg in batch_segs:
+                translation = parsed.get(seg.segment_number, "")
+
+                async with async_session() as session:
+                    db_seg = await session.get(Segment, seg.id)
+                    if db_seg:
+                        db_seg.translation = translation or db_seg.translation
+                        db_seg.status = "needs_review"
+                        db_seg.has_qa = False
+                        await session.commit()
+
+                reapplied.append({
+                    "id": seg.id, "segment_number": seg.segment_number,
+                    "source_text": seg.source_text,
+                    "translation": translation or seg.translation,
+                    "status": "needs_review",
+                })
+
+        return {"segments": reapplied, "applied": len(reapplied)}
+
+    def _parse_batch_response(self, response: str, batch_segments: list) -> dict:
+        result = {}
+        for match in SEG_PATTERN.finditer(response):
+            seg_num = int(match.group(1))
+            text = match.group(2).strip()
+            if text:
+                result[seg_num] = text
+        if not result:
+            parts = [p.strip() for p in response.split("\n\n") if p.strip()]
+            for i, seg in enumerate(batch_segments):
+                seg_num = seg["segment_number"]
+                text = parts[i] if i < len(parts) else ""
+                if text:
+                    result[seg_num] = text
+        return result
+
+    def _build_batch_context(self, segments: list, batch_start: int, batch_size: int, novel_context: dict) -> dict:
+        context = dict(novel_context)
+
+        prev_start = max(0, batch_start - WINDOW_SIZE)
+        previous = []
+        for j in range(prev_start, batch_start):
+            prev = segments[j]
+            previous.append({"source_text": prev.source_text, "translation": prev.translation or ""})
+
+        next_start = batch_start + batch_size
+        next_end = min(len(segments), next_start + WINDOW_SIZE)
+        next_segments = []
+        for j in range(next_start, next_end):
+            nxt = segments[j]
+            next_segments.append({"source_text": nxt.source_text})
+
+        context["sliding_window"] = {
+            "previous_translations": previous,
+            "next_sources": next_segments,
+            "current_index": batch_start + 1,
+            "total_segments": len(segments),
+        }
+
+        return context
