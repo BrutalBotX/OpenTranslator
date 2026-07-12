@@ -65,8 +65,7 @@ opentranslator/
 │   ├── preload.ts               # IPC bridge (secure)
 │   └── ipc/
 │       ├── file-handlers.ts     # Open/save project files, import chapter
-│       ├── llm-handlers.ts      # Proxy LLM calls (avoid CORS)
-│       └── db-handlers.ts       # Direct DB access from renderer
+│       └── llm-handlers.ts      # Proxy LLM calls (avoid CORS)
 │
 ├── src/renderer/                # React renderer (TypeScript)
 │   ├── App.tsx                  # Router, backend status polling, ChromaDB init
@@ -74,75 +73,73 @@ opentranslator/
 │   │   └── WorkspaceLayout.tsx  # Sidebar + main + status bar + loading overlay
 │   ├── pages/
 │   │   ├── ProjectHome.tsx      # Novel list, create/open/delete with confirmation
-│   │   ├── TranslateView.tsx    # Dual mode: translate → review
-│   │   ├── CharactersPanel.tsx  # Character CRUD with edit modal
+│   │   ├── TranslateView.tsx    # Dual mode: translate → review, horizontal toolbar
+│   │   ├── CharactersPanel.tsx  # Character CRUD with edit modal + transliteration
 │   │   ├── GlossaryPanel.tsx    # Glossary CRUD
-│   │   ├── QAPanel.tsx          # QA queue with source + translation context
-│   │   └── SettingsPage.tsx     # LLM config, batch size slider, language prefs
+│   │   ├── QAPanel.tsx          # QA queue with grouping + batch resolve
+│   │   └── SettingsPage.tsx     # LLM config, batch size slider, timeout slider
 │   ├── components/
+│   │   ├── ErrorBoundary.tsx    # Catches render crashes, shows retry UI
 │   │   ├── EditorPane.tsx       # Source text with glossary highlighting
-│   │   ├── TranslationPane.tsx  # Side-by-side edit/translate (legacy)
 │   │   ├── ChapterReviewPane.tsx # Review mode with edit/accept/apply QA
-│   │   ├── ChapterNav.tsx       # Chapter list, Translate Chapter btn, mode toggle
-│   │   ├── ContextPanel.tsx     # Characters, glossary, plot arcs sidebar
+│   │   ├── ChapterNav.tsx       # Chapter list (thin sidebar) with delete
+│   │   ├── ContextPanel.tsx     # Characters, glossary, plot arcs + InstructionBox
 │   │   ├── ContextBar.tsx       # Status bar at top of translate view
 │   │   ├── StatusBar.tsx        # Bottom bar: backend status, activity, progress
-│   │   ├── LoadingOverlay.tsx   # Full-screen blur during connecting state
-│   │   ├── TranslationCompletePopup.tsx  # Modal after chapter translates
-│   │   ├── AmbiguityHighlighter.tsx  # Inline highlights for issues
-│   │   ├── QAPopup.tsx          # Inline question popup
-│   │   └── LLMConfigForm.tsx    # Add/configure LLM providers
+│   │   ├── LoadingOverlay.tsx   # Startup steps (Python → ChromaDB → Ready)
+│   │   ├── InstructionBox.tsx   # Per-project instruction editor + prompt preview
+│   │   └── TranslationCompletePopup.tsx  # Modal after chapter translates
 │   ├── stores/                  # Zustand state management
-│   │   ├── projectStore.ts      # Current project/novel state
-│   │   ├── translationStore.ts  # Segments, view mode, chapter progress
+│   │   ├── projectStore.ts      # Current project/novel state + .novelproj save
+│   │   ├── translationStore.ts  # Segments, view mode, translate error, llmStatus
 │   │   ├── statusStore.ts       # Backend status, activity, progress bar
-│   │   ├── settingsStore.ts     # LLM configs, batch size, language prefs
-│   │   └── characterStore.ts    # Character data cache
+│   │   └── settingsStore.ts     # LLM configs, batch size, language prefs
 │   ├── services/
-│   │   ├── apiClient.ts         # API client via IPC bridge (CORS-safe)
-│   │   └── ipcClient.ts         # Electron IPC wrapper
+│   │   └── apiClient.ts         # API client via IPC bridge (120s timeout)
 │
 ├── backend/                     # Python backend (FastAPI)
-│   ├── main.py                  # App entry, startup events, health check
+│   ├── main.py                  # App entry, startup events, health check, DB migration
 │   ├── config.py                # Settings, env vars
 │   ├── api/
-│   │   ├── translate.py         # POST /translate, /chapters/{id}/translate-all, /apply-qa
+│   │   ├── translate.py         # Translate-all, apply-qa, reapply, progress, cancel
 │   │   ├── context.py           # GET /context/{chapter_id}
-│   │   ├── characters.py        # CRUD /characters
+│   │   ├── characters.py        # CRUD /characters + gender suggestion + transliteration
 │   │   ├── glossary.py          # CRUD /glossary
-│   │   ├── questions.py         # QA queue with segment join for source + translation
-│   │   ├── projects.py          # CRUD projects, chapters, segments, import, summarize
-│   │   ├── settings.py          # Settings CRUD, model list fetch, llm-config
-│   │   ├── startup.py           # ChromaDB background init tracking
-│   │   └── export.py            # HTML, plaintext export
+│   │   ├── questions.py         # QA queue + batch answer/dismiss/classify
+│   │   ├── projects.py          # CRUD projects, chapters, segments, import, export/import-proj
+│   │   ├── settings.py          # Settings CRUD, model fetch, llm-config, llm_timeout
+│   │   ├── startup.py           # ChromaDB background init with timeout
+│   │   └── export.py            # HTML, plaintext, markdown export
 │   ├── pipeline/
-│   │   ├── chapter_translator.py # Batch translation, sliding window, QA integration
+│   │   ├── chapter_translator.py # Batch translation, progress tracking, cancel, auto-char/glossary
 │   │   ├── pipeline.py          # Single-segment translation pipeline
-│   │   ├── segmenter.py         # Text → segments (lang-aware)
-│   │   ├── context_gatherer.py  # Assembles context block (chars, glossary, TM)
-│   │   ├── ambiguity_detector.py # Flags issues → creates QA items
+│   │   ├── context_gatherer.py  # Assembles context block (chars, glossary, TM, instructions)
+│   │   ├── ambiguity_detector.py # Flags issues → creates QA items (pronoun proximity merge)
 │   │   ├── translator.py        # LLM translation call (batch-aware)
 │   │   └── post_processor.py    # Consistency checks
 │   ├── llm/
-│   │   ├── router.py            # Litellm multi-provider router
-│   │   ├── prompts.py           # System/user prompts, sliding window, batch prompts
+│   │   ├── router.py            # Litellm multi-provider router (with timeout)
+│   │   ├── prompts.py           # System/user prompts, batch prompts, instructions injection
 │   │   └── providers.py         # 15 providers with default models + base URLs
 │   ├── detectors/
-│   │   ├── base.py              # Abstract detector interface
+│   │   ├── base.py              # Abstract detector + merge_pronoun_issues()
 │   │   ├── zh.py                # Chinese (chengyu, pronouns, names, cultivation terms)
 │   │   ├── ja.py                # Japanese (honorifics, pronouns)
-│   │   ├── ko.py                # Korean (honorifics, speech levels)
+│   │   ├── ko.py                # Korean (honorifics)
 │   │   └── registry.py          # Detector lookup by language
 │   ├── db/
 │   │   ├── database.py          # SQLAlchemy + SQLite setup
 │   │   ├── models.py            # ORM models (all tables)
-│   │   ├── vector_store.py      # ChromaDB for TM (lazy init, ONNX suppressed)
+│   │   ├── vector_store.py      # ChromaDB for TM (upsert, get_or_create_collection)
 │   │   └── migrations/          # Alembic auto-generated migration
 │   ├── export/
-│   │   ├── epub.py
-│   │   ├── html.py
-│   │   └── plaintext.py
-│   └── utils.py                 # Chinese name auto-detection
+│   │   ├── epub.py              # Markdown export (placeholder)
+│   │   ├── html.py              # HTML export with escaping
+│   │   └── plaintext.py         # Plaintext export
+│   └── utils/                   # Package with helpers
+│       ├── __init__.py          # CJK name detection (zh/ja/ko), culture sets
+│       ├── transliteration.py   # Pinyin (accent marks), pykakasi romaji, hangul
+│       └── instructions.py      # Parse "Replace name X with Y", alias commands
 │
 ├── docs/
 │   └── architecture-plan.md     # This file
@@ -503,7 +500,7 @@ Stores source_text as document, target_text + novel_id + chapter_id as metadata.
 │              │                                   │                  │
 └──────────────┴──────────────────────────────────┴──────────────────┘
 └────────────────────────── STATUSBAR ─────────────────────────────────┘
-  ● Connected  │  Translating (6/12) ████░░  │  Novel · 4 ch · v0.1.0
+   ● Connected  │  Translating (6/12) ████░░  │  Novel · 4 ch · v0.2.0
 ```
 
 ### Views
@@ -543,16 +540,23 @@ Progress bar shows during:
 |--------|----------|-------------|
 | POST | `/api/chapters/{id}/translate-all` | Translate all segments with batching + QA |
 | POST | `/api/chapters/{id}/apply-qa` | Re-translate segments with resolved QA answers |
+| POST | `/api/chapters/{id}/reapply` | Clear + re-translate all segments with current context |
+| POST | `/api/chapters/{id}/cancel-translation` | Abort in-progress chapter translation |
+| GET | `/api/chapters/{id}/translate-progress` | Get live translation progress (batch, status) |
 | POST | `/api/chapters/{id}/check-status` | Update chapter translated flag |
 | POST | `/api/chapters/{id}/summarize` | Auto-generate plot summary |
 | POST | `/translate` | Single segment translate (legacy) |
 | PUT | `/api/segments/{id}` | Save segment translation |
+| DELETE | `/api/chapters/{id}` | Delete chapter + TM cleanup |
 
 ### Projects & Chapters
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET/POST | `/api/projects` | List/create projects |
 | GET/DELETE | `/api/projects/{id}` | Get/delete project |
+| GET/PUT | `/api/projects/{id}/instructions` | Project-level translator instructions |
+| GET | `/api/projects/{id}/export-proj` | Export full project as .novelproj JSON |
+| POST | `/api/projects/import-proj` | Import .novelproj JSON into SQLite |
 | GET | `/api/projects/{id}/chapters` | List chapters |
 | POST | `/api/chapters/import` | Import chapter (text → segments) |
 | GET | `/api/chapters/{id}/segments` | Get segments |
@@ -565,10 +569,13 @@ Progress bar shows during:
 ### Characters, Glossary, Questions
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| CRUD | `/api/characters` | Character management |
+| CRUD | `/api/characters` | Character management (with gender suggestion + transliteration) |
 | CRUD | `/api/glossary` | Glossary management |
-| GET | `/api/questions` | List QA (includes segment source + translation) |
+| GET | `/api/questions` | List QA (includes segment source + translation + transliteration) |
 | POST | `/api/questions/{id}/answer-and-retranslate` | Answer + re-translate |
+| POST | `/api/questions/batch-answer` | Batch-answer all questions of a type |
+| POST | `/api/questions/batch-dismiss` | Dismiss all questions of a type |
+| POST | `/api/questions/batch-answer-and-classify` | Batch answer Name-type + auto-classify |
 
 ### Settings
 | Method | Endpoint | Description |
@@ -581,7 +588,7 @@ Progress bar shows during:
 ### Export
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/export` | Export as HTML or plaintext |
+| POST | `/api/export` | Export as HTML, plaintext, or markdown |
 
 ---
 
@@ -593,6 +600,7 @@ Progress bar shows during:
 - `default_source_lang`, `default_target_lang`
 - `default_project_dir` — Default save location for projects
 - `batch_size` — Segments per LLM call (slider 1-10, default 4)
+- `llm_timeout` — Max seconds to wait for LLM response (range 10-300, default 60)
 
 ### LLM Provider Model Fetching
 `GET /api/settings/models?provider=xxx&api_key=yyy` fetches available models:

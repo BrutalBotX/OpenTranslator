@@ -21,6 +21,18 @@ CULTURE_SET = {
 }
 
 
+JAPANESE_SURNAMES = {
+    "佐藤", "鈴木", "高橋", "田中", "渡辺", "伊藤", "山本", "中村", "小林", "加藤",
+    "吉田", "山田", "佐々木", "山口", "松本", "井上", "木村", "林", "斎藤", "清水",
+}
+
+KOREAN_SURNAMES = {
+    "김", "이", "박", "최", "정", "강", "조", "윤", "장", "임",
+    "한", "오", "서", "신", "권", "황", "안", "송", "전", "홍",
+}
+
+JAPANESE_NAME_SUFFIXES = {"さん", "様", "君", "ちゃん", "殿", "先生", "先輩", "後輩", "師匠"}
+
 COMMON_SURNAMES = {
     "李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴",
     "徐", "孙", "胡", "朱", "高", "林", "何", "郭", "马", "罗",
@@ -33,7 +45,7 @@ COMMON_SURNAMES = {
     "顾", "侯", "邵", "孟", "龙", "万", "段", "漕", "钱", "汤",
     "尹", "黎", "易", "常", "武", "乔", "贺", "赖", "龚", "文",
     "楚", "凤", "花", "月", "雪", "云", "柳", "梅", "兰", "竹",
-    "林", "苏", "慕", "容", "司", "徒", "欧", "阳", "诸", "葛",
+    "苏", "慕", "容", "司", "徒", "欧", "阳", "诸", "葛",
 }
 
 
@@ -71,5 +83,45 @@ def detect_potential_characters(text: str, existing_names: List[str]) -> List[Tu
                     candidates[name] += 1
 
     threshold = max(2, int(len(text) / 1000))
+    threshold = min(threshold, 3)
+    return [(name, count) for name, count in candidates.most_common() if count >= threshold and count >= 2]
+
+
+def detect_japanese_names(text: str, existing_names: List[str]) -> List[Tuple[str, int]]:
+    existing_lower = set(n.lower() for n in existing_names)
+    candidates = Counter()
+
+    for suffix in JAPANESE_NAME_SUFFIXES:
+        pattern = re.compile(rf'([\u4e00-\u9fff]{{1,3}}){re.escape(suffix)}')
+        for m in pattern.finditer(text):
+            name = m.group(1)
+            if name.lower() not in existing_lower and name not in CULTURE_SET:
+                candidates[name] += 1
+
+    for surname in JAPANESE_SURNAMES:
+        pattern = re.compile(re.escape(surname) + r'[\u4e00-\u9fff]{1,2}')
+        for m in pattern.finditer(text):
+            name = m.group()
+            if name.lower() not in existing_lower and name not in CULTURE_SET:
+                candidates[name] += 1
+
+    threshold = max(2, int(len(text) / 500))
+    threshold = min(threshold, 3)
+    return [(name, count) for name, count in candidates.most_common() if count >= threshold and count >= 2]
+
+
+def detect_korean_names(text: str, existing_names: List[str]) -> List[Tuple[str, int]]:
+    existing_lower = set(n.lower() for n in existing_names)
+    candidates = Counter()
+
+    for surname in KOREAN_SURNAMES:
+        for length in (2, 3):
+            pattern = re.compile(re.escape(surname) + r'[\uac00-\ud7af]{' + str(length - 1) + r'}')
+            for m in pattern.finditer(text):
+                name = m.group()
+                if name.lower() not in existing_lower and len(name) >= 2:
+                    candidates[name] += 1
+
+    threshold = max(2, int(len(text) / 500))
     threshold = min(threshold, 3)
     return [(name, count) for name, count in candidates.most_common() if count >= threshold and count >= 2]

@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { HashRouter, Routes, Route, Link } from 'react-router-dom'
 import { FolderOpen } from 'lucide-react'
+import ErrorBoundary from './components/ErrorBoundary'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import ProjectHome from './pages/ProjectHome'
 import TranslateView from './pages/TranslateView'
@@ -31,6 +32,14 @@ export default function App() {
   const setBackendStatus = useStatusStore(s => s.setBackendStatus)
   const setActivity = useStatusStore(s => s.setActivity)
 
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const { setAppVersion } = useStatusStore()
+  const fetchVersion = async () => {
+    try {
+      const data = await api.get<{ version: string }>('/health')
+      if (data?.version) setAppVersion(data.version)
+    } catch {}
+  }
   useEffect(() => {
     if (!window.electronAPI?.onBackendStatus) {
       window.electronAPI?.getBackendStatus?.().then(data => {
@@ -40,47 +49,50 @@ export default function App() {
     }
     const unsub = window.electronAPI.onBackendStatus(data => {
       setBackendStatus(data.status as any, data.error || undefined)
-
-      // Start polling model init once backend is connected
       if (data.status === 'connected') {
+        fetchVersion()
         pollModelInit()
       }
     })
     window.electronAPI.getBackendStatus().then(data => {
       setBackendStatus(data.status as any, data.error || undefined)
+      if (data.status === 'connected') fetchVersion()
     })
-    return unsub
+    return () => {
+      unsub()
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    }
   }, [])
-
-  const pollModelInit = async () => {
+  const pollModelInit = () => {
+    if (pollRef.current) clearInterval(pollRef.current)
     setActivity('Loading AI model...')
-    const poll = setInterval(async () => {
+    pollRef.current = setInterval(async () => {
       try {
         const status = await api.get<{ chromadb: string }>('/init/status')
-        if (status.chromadb === 'ready') {
-          clearInterval(poll)
-          setActivity(null)
-        } else if (status.chromadb === 'error') {
-          clearInterval(poll)
+        if (status.chromadb === 'ready' || status.chromadb === 'error') {
+          if (pollRef.current) clearInterval(pollRef.current)
+          pollRef.current = null
           setActivity(null)
         }
-      } catch { clearInterval(poll); setActivity(null) }
+      } catch {
+        if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = null
+        setActivity(null)
+      }
     }, 2000)
   }
 
   return (
-    <HashRouter>
-      <Routes>
-        <Route element={<WorkspaceLayout />}>
+      <HashRouter>
+        <Routes>
+          <Route element={<ErrorBoundary><WorkspaceLayout /></ErrorBoundary>}>
           <Route index element={<ProjectHome />} />
           <Route path="translate/:novelId" element={<TranslateView />} />
-          <Route path="characters" element={<NoProjectMessage label="Characters" />} />
           <Route path="characters/:novelId" element={<CharactersPanel />} />
-          <Route path="glossary" element={<NoProjectMessage label="Glossary" />} />
           <Route path="glossary/:novelId" element={<GlossaryPanel />} />
-          <Route path="qa" element={<NoProjectMessage label="QA Queue" />} />
           <Route path="qa/:novelId" element={<QAPanel />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="*" element={<div className="p-6 text-center text-gray-500"><h2 className="text-lg font-bold mb-2">404</h2><p className="text-sm">Page not found</p></div>} />
         </Route>
       </Routes>
     </HashRouter>

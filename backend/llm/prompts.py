@@ -169,30 +169,4 @@ class TranslationPrompt:
         return names.get(code, code)
 
 
-class DetectionPrompt:
-    def build(self, text: str, context: dict) -> str:
-        lines = [
-            "Analyze the following text for translation ambiguity issues.",
-            "Check for each of the following and report any that apply:",
-            "",
-            "1. PRONOUNS: Pronouns (他/她/它/彼/彼女) without a clear referent in the known characters list.",
-            "2. NEW NAMES: Any 2-4 character Chinese name or Japanese name not in known characters or glossary.",
-            "3. IDIOMS: Chengyu (成语), yojijukugo, or other idiomatic expressions.",
-            "4. CULTURAL TERMS: Terms specific to xianxia/wuxia/fantasy settings (cultivation realms, techniques, etc.).",
-            "5. GENDER: Characters whose gender is ambiguous from the text.",
-            "",
-            "Known characters:",
-        ]
 
-        for c in context.get("characters", []):
-            variants = c.get("name_variants", [])
-            names = [c["name"]] + list(variants)
-            lines.append(f"- {', '.join(names)} ({c.get('gender', '?')}, {c.get('role', '?')})")
-
-        lines.extend(["", "Known glossary terms:"])
-        for g in context.get("glossary", []):
-            lines.append(f"- {g['source_term']} → {g['target_term']}")
-
-        lines.extend(["", "Text to analyze:", text])
-
-        return "\n".join(lines)

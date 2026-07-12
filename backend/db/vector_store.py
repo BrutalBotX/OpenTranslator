@@ -11,12 +11,9 @@ try:
 except Exception:
     pass
 
-try:
-    import chromadb
-    from chromadb.config import Settings as ChromaSettings
-    from chromadb.utils import embedding_functions
-finally:
-    pass
+import chromadb
+from chromadb.config import Settings as ChromaSettings
+from chromadb.utils import embedding_functions
 
 from backend.config import settings
 
@@ -47,14 +44,7 @@ def _get_collection():
         pass
     if _ef is None:
         _ef = embedding_functions.DefaultEmbeddingFunction()
-    try:
-        _tm_collection = client.get_collection("translation_memory")
-    except Exception:
-        try:
-            client.delete_collection("translation_memory")
-        except Exception:
-            pass
-        _tm_collection = client.create_collection("translation_memory", embedding_function=_ef)
+    _tm_collection = client.get_or_create_collection("translation_memory", embedding_function=_ef)
     return _tm_collection
 
 
@@ -67,13 +57,17 @@ def search_similar(source_text: str, novel_id: str, n_results: int = 5) -> list[
             where={"novel_id": novel_id},
         )
         items = []
-        if results["metadatas"] and results["metadatas"][0]:
-            for i, meta in enumerate(results["metadatas"][0]):
+        metas = (results.get("metadatas") or [None])[0]
+        dists = (results.get("distances") or [None])[0]
+        if metas:
+            for i, meta in enumerate(metas):
+                if not meta:
+                    continue
                 items.append({
                     "source_text": meta.get("source_text", ""),
                     "target_text": meta.get("target_text", ""),
                     "chapter_id": meta.get("chapter_id", ""),
-                    "distance": results["distances"][0][i] if results["distances"] else 0,
+                    "distance": dists[i] if dists and i < len(dists) else 0,
                 })
         return items
     except Exception as e:
@@ -84,7 +78,7 @@ def search_similar(source_text: str, novel_id: str, n_results: int = 5) -> list[
 def add_to_tm(segment_id: str, source_text: str, target_text: str, novel_id: str, chapter_id: str):
     try:
         collection = _get_collection()
-        collection.add(
+        collection.upsert(
             documents=[source_text],
             metadatas=[{
                 "id": segment_id,
@@ -96,4 +90,4 @@ def add_to_tm(segment_id: str, source_text: str, target_text: str, novel_id: str
             ids=[segment_id],
         )
     except Exception as e:
-        print(f"[TM] Add error: {e}")
+        print(f"[TM] Upsert error: {e}")

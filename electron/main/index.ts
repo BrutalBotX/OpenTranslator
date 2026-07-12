@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import { join } from 'path'
 import { spawn, ChildProcess } from 'child_process'
+import { mkdirSync } from 'fs'
 import { registerFileHandlers } from '../ipc/file-handlers'
 import { registerLLMHandlers } from '../ipc/llm-handlers'
-import { registerDBHandlers } from '../ipc/db-handlers'
+
 import http from 'http'
 
 let mainWindow: BrowserWindow | null = null
@@ -23,18 +24,26 @@ function sendStatus() {
 function checkHealth() {
   const req = http.get(`${BACKEND_URL}/health`, (res) => {
     if (res.statusCode === 200) {
-      _backendStatus = 'connected'
-      _backendError = null
+      if (_backendStatus !== 'connected') {
+        _backendStatus = 'connected'
+        _backendError = null
+        sendStatus()
+      }
+    }
+  })
+  req.on('error', () => {
+    if (_backendStatus === 'connected') {
+      _backendStatus = 'error'
+      _backendError = 'Backend connection lost'
       sendStatus()
     }
   })
-  req.on('error', () => {})
   req.setTimeout(2000, () => req.destroy())
 }
 
 function startHealthPoll() {
   let attempts = 0
-  const maxAttempts = 30 // 30 * 500ms = 15s
+  const maxAttempts = 30
   const interval = setInterval(() => {
     if (_backendStatus === 'connected') { clearInterval(interval); return }
     attempts++
@@ -69,12 +78,19 @@ function startBackend(): void {
   sendStatus()
 
   const isPackaged = app.isPackaged
-  const backendPath = isPackaged ? join(process.resourcesPath, 'backend') : join(__dirname, '../../')
-  const moduleArg = isPackaged ? 'main:app' : 'backend.main:app'
-  const cwd = isPackaged ? backendPath : join(__dirname, '../../')
+  const cwd = isPackaged ? process.resourcesPath : join(__dirname, '../../')
+
+  let stderrBuf = ''
+
+  const userDataPath = app.getPath('userData')
+  const dbDir = join(userDataPath, 'projects')
+  const chromaPath = join(userDataPath, 'chroma')
+  mkdirSync(dbDir, { recursive: true })
+  mkdirSync(chromaPath, { recursive: true })
+  const dbPath = join(dbDir, 'opentranslator.db')
 
   try {
-    backendProcess = spawn('python', ['-m', 'uvicorn', moduleArg, '--host', '127.0.0.1', '--port', String(BACKEND_PORT)], {
+    backendProcess = spawn('python', ['-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', String(BACKEND_PORT)], {
       cwd: cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
@@ -82,11 +98,24 @@ function startBackend(): void {
         ORT_LOGGING_LEVEL: '3',
         ORT_TENSORRT_DISABLE: '1',
         CUDA_VISIBLE_DEVICES: '-1',
+        OT_DATABASE_URL: `sqlite+aiosqlite:///${dbPath.replace(/\\/g, '/')}`,
+        OT_CHROMA_PERSIST_DIR: chromaPath,
       }
     })
 
-    backendProcess.stdout?.on('data', (data: Buffer) => console.log(`[backend] ${data.toString().trim()}`))
-    backendProcess.stderr?.on('data', (data: Buffer) => console.error(`[backend] ${data.toString().trim()}`))
+    backendProcess.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString().trim()
+      if (text) console.log(`[backend] ${text}`)
+    })
+
+    backendProcess.stderr?.on('data', (data: Buffer) => {
+      const text = data.toString().trim()
+      if (text) {
+        console.error(`[backend] ${text}`)
+        stderrBuf += text + '\n'
+        if (stderrBuf.length > 2000) stderrBuf = stderrBuf.slice(-2000)
+      }
+    })
 
     backendProcess.on('error', (err) => {
       _backendStatus = 'error'
@@ -98,7 +127,10 @@ function startBackend(): void {
       console.log(`[backend] exited with code ${code}`)
       if (_backendStatus !== 'error') {
         _backendStatus = 'error'
-        _backendError = code === null ? 'Backend process terminated' : `Backend exited with code ${code}`
+        const stderrHint = stderrBuf ? `\n\nLast output:\n${stderrBuf.slice(0, 500)}` : ''
+        _backendError = code === null
+          ? 'Backend process terminated'
+          : `Backend exited with code ${code}. Make sure Python 3.11+ is installed and all dependencies are installed: pip install -r requirements.txt${stderrHint}`
         sendStatus()
       }
     })
@@ -119,6 +151,8 @@ function stopBackend(): void {
 }
 
 function createWindow(): void {
+  Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -142,7 +176,6 @@ app.whenReady().then(() => {
   const projectsDir = join(app.getPath('documents'), 'OpenTranslator', 'projects')
   registerFileHandlers(projectsDir)
   registerLLMHandlers()
-  registerDBHandlers()
 
   startBackend()
   createWindow()
@@ -165,7 +198,11 @@ app.on('before-quit', () => {
 
 ipcMain.handle('backend:port', () => BACKEND_PORT)
 ipcMain.handle('backend:status', () => ({ status: _backendStatus, error: _backendError }))
-ipcMain.handle('app:getPath', (_event, name: string) => app.getPath(name))
+ipcMain.handle('app:getPath', (_event, name: string) => {
+  const valid = ['home', 'userData', 'documents', 'downloads', 'desktop', 'appData', 'temp', 'exe', 'module']
+  if (!valid.includes(name)) throw new Error(`Invalid path name: ${name}`)
+  return app.getPath(name as any)
+})
 ipcMain.handle('dialog:selectDirectory', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
   return result.canceled || !result.filePaths.length ? null : result.filePaths[0]

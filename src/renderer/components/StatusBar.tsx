@@ -8,11 +8,17 @@ const statusConfig = {
 }
 
 export default function StatusBar() {
-  const { backendStatus, backendError, activity, progress } = useStatusStore()
-  const { novel, chapters } = useProjectStore()
+  const backendStatus = useStatusStore(s => s.backendStatus)
+  const backendError = useStatusStore(s => s.backendError)
+  const activity = useStatusStore(s => s.activity)
+  const progress = useStatusStore(s => s.progress)
+  const appVersion = useStatusStore(s => s.appVersion)
+  const novel = useProjectStore(s => s.novel)
+  const chapters = useProjectStore(s => s.chapters)
+  const cls = chapters || []
 
-  const cfg = statusConfig[backendStatus]
-  const statusLabel = backendStatus === 'error' && backendError ? `Error: ${backendError.slice(0, 60)}` : cfg.text
+  const cfg = statusConfig[backendStatus] || statusConfig.error
+  const statusLabel = backendStatus === 'error' && backendError ? `Error: ${backendError.slice(0, 60)}` : (cfg?.text || 'Unknown')
 
   const progressPct = progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
 
@@ -42,11 +48,11 @@ export default function StatusBar() {
           <>
             <span className="hidden sm:inline truncate max-w-[120px]">{novel.title}</span>
             <span className="hidden sm:inline text-gray-700">·</span>
-            <span>{chapters.length} chapter{chapters.length !== 1 ? 's' : ''}</span>
+            <span>{cls.length} chapter{cls.length !== 1 ? 's' : ''}</span>
           </>
         )}
         <span className="text-gray-700">|</span>
-        <span className="text-gray-600">v0.1.0</span>
+        <span className="text-gray-600">v{appVersion || '0.0.0'}</span>
       </div>
     </div>
   )

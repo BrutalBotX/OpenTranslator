@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { Upload, Languages, Loader2, AlertTriangle, Square, Download, Eye } from 'lucide-react'
-import EditorPane from '../components/EditorPane'
+import { Upload, Languages, Loader2, AlertTriangle, Square, Download, Eye, RefreshCw } from 'lucide-react'
 import ChapterReviewPane from '../components/ChapterReviewPane'
 import ContextBar from '../components/ContextBar'
 import ChapterNav from '../components/ChapterNav'
@@ -24,6 +23,7 @@ export default function TranslateView() {
     setTranslatingId, setViewMode, translateChapter, cancelTranslation, dismissCompletion, setTranslateProgress,
   } = useTranslationStore()
 
+  const { deleteChapter } = useProjectStore()
   const { setActivity, setProgress } = useStatusStore()
   const [importing, setImporting] = useState(false)
   const [showContext, setShowContext] = useState(true)
@@ -31,7 +31,7 @@ export default function TranslateView() {
 
   useEffect(() => {
     if (novelId && (!novel || novel.id !== novelId)) loadNovel(novelId)
-  }, [novelId])
+  }, [novelId, novel, loadNovel])
 
   // Auto-select chapter when only 1 exists
   useEffect(() => {
@@ -47,8 +47,10 @@ export default function TranslateView() {
   }, [])
 
   const checkStatus = async (chapterId: string) => {
-    await api.post(`/chapters/${chapterId}/check-status`)
-    if (novelId) await fetchChapters(novelId)
+    try {
+      await api.post(`/chapters/${chapterId}/check-status`)
+    } catch {}
+    if (novelId) await fetchChapters(novelId).catch(() => {})
   }
 
   const handleImport = async () => {
@@ -74,6 +76,20 @@ export default function TranslateView() {
     if (novelId) await fetchChapters(novelId)
   }
 
+  const handleReapply = async () => {
+    if (!activeChapterId || !novelId) return
+    setActivity('Reapplying with updated context...')
+    useTranslationStore.setState({ translatingChapter: true, translateError: null })
+    try {
+      await api.post(`/chapters/${activeChapterId}/reapply`, { novel_id: novelId })
+      await loadSegments(activeChapterId)
+    } catch (e: any) {
+      useTranslationStore.setState({ translateError: e?.message || 'Reapply failed', translatingChapter: false })
+    }
+    useTranslationStore.setState({ translatingChapter: false })
+    setActivity(null)
+  }
+
   const handleExport = async (format: string) => {
     if (!novelId) return
     try {
@@ -84,12 +100,13 @@ export default function TranslateView() {
       a.href = url
       a.download = data.filename || `export.${format === 'html' ? 'html' : 'txt'}`
       a.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
     } catch (e) { console.error('Export failed', e) }
   }
 
   const handleAccept = async (segmentId: string) => {
-    const seg = segments.find(s => s.id === segmentId)
+    const currentSegs = Array.isArray(segments) ? segments : []
+    const seg = currentSegs.find(s => s.id === segmentId)
     if (!seg) return
     setActivity('Saving...')
     try {
@@ -105,24 +122,65 @@ export default function TranslateView() {
     updateSegment(segmentId, { translation, status: 'needs_review' })
   }
 
+  // Restore polling on mount if translation was in progress while navigating away
+  useEffect(() => {
+    if (useTranslationStore.getState().translatingChapter && activeChapterId) {
+      const restore = async () => {
+        const [segData, progData] = await Promise.allSettled([
+          api.get<Segment[]>(`/chapters/${activeChapterId}/segments`),
+          api.get<any>(`/chapters/${activeChapterId}/translate-progress`),
+        ])
+        if (segData.status === 'fulfilled') {
+          setProgress({ current: segData.value.filter((s: any) => s.translation).length, total: segData.value.length })
+          setSegments(segData.value)
+        }
+        if (progData.status === 'fulfilled') setTranslateProgress(progData.value)
+      }
+      restore()
+    }
+  }, [])
+
   // Poll segments and progress during chapter translation
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const isMountedRef = useRef(true)
+  useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false } }, [])
   useEffect(() => {
     if (translatingChapter && activeChapterId) {
+      const chapterId = activeChapterId
       pollRef.current = setInterval(async () => {
+        if (!isMountedRef.current || !useTranslationStore.getState().translatingChapter) return
         try {
           const [segData, progData] = await Promise.allSettled([
-            api.get<Segment[]>(`/chapters/${activeChapterId}/segments`),
-            api.get<any>(`/chapters/${activeChapterId}/translate-progress`),
+            api.get<Segment[]>(`/chapters/${chapterId}/segments`),
+            api.get<any>(`/chapters/${chapterId}/translate-progress`),
           ])
+          if (!isMountedRef.current || !useTranslationStore.getState().translatingChapter) return
           if (segData.status === 'fulfilled') {
             const data = segData.value
             const done = data.filter(s => s.translation).length
+            const currentActiveId = useTranslationStore.getState().activeSegmentId
             setProgress({ current: done, total: data.length })
-            setSegments(data)
+            setSegments(prev => {
+              const merged = [...data]
+              for (let i = 0; i < merged.length; i++) {
+                const existing = prev.find(s => s.id === merged[i].id)
+                if (existing && existing.id === currentActiveId && existing.translation !== merged[i].translation) {
+                  merged[i] = { ...merged[i], translation: existing.translation }
+                }
+              }
+              return merged
+            })
           }
           if (progData.status === 'fulfilled') {
             setTranslateProgress(progData.value)
+            const prog = progData.value
+            if (prog.status === 'done' && prog.total_batches > 0 && !prog._saved) {
+              const nId = useTranslationStore.getState().activeChapterId
+              if (nId) {
+                prog._saved = true
+                window.electronAPI.saveProject({ id: nId }).catch(() => {})
+              }
+            }
           }
         } catch {}
       }, 2000)
@@ -132,9 +190,10 @@ export default function TranslateView() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [translatingChapter, activeChapterId])
 
-  const activeSeg = segments.find(s => s.id === activeSegmentId)
-  const hasSegments = segments.length > 0
-  const hasTranslations = segments.some(s => s.translation)
+  const segs = Array.isArray(segments) ? segments : []
+  const activeSeg = segs.find(s => s.id === activeSegmentId)
+  const hasSegments = segs.length > 0
+  const hasTranslations = segs.some(s => s.translation)
 
   const handleToggleMode = () => {
     const newMode = viewMode === 'translate' ? 'review' : 'translate'
@@ -150,23 +209,38 @@ export default function TranslateView() {
         chapters={chapters}
         activeChapter={activeChapterId}
         onSelectChapter={handleSelectChapter}
+        onDeleteChapter={async (id) => {
+          if (!novelId) return
+          await deleteChapter(id, novelId)
+          if (id === activeChapterId) {
+            setActiveChapter(null)
+            setSegments([])
+            dismissCompletion()
+            setViewMode('translate')
+          }
+        }}
         novelId={novelId}
       />
 
       <div className="flex-1 flex flex-col">
         <ContextBar showContext={showContext} onToggleContext={() => setShowContext(!showContext)} />
 
-        {hasSegments && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-gray-900 border-b border-gray-800">
-            <button onClick={handleImport} disabled={importing}
-              className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-xs transition-colors">
-              {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-              Import
-            </button>
+        <div className="flex items-center gap-2 px-4 py-2 bg-gray-900 border-b border-gray-800">
+          <button onClick={handleImport} disabled={importing}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-xs transition-colors">
+            {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            Import
+          </button>
+          {hasSegments && (<>
             <button onClick={handleTranslateChapter} disabled={translatingChapter}
               className="flex items-center gap-1 px-2.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded text-xs transition-colors">
               {translatingChapter ? <Loader2 size={12} className="animate-spin" /> : <Languages size={12} />}
               {translatingChapter ? 'Translating...' : 'Translate'}
+            </button>
+            <button onClick={handleReapply} disabled={translatingChapter}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded text-xs transition-colors">
+              {translatingChapter ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Apply
             </button>
             <div className="w-px h-4 bg-gray-700" />
             <button onClick={handleToggleMode}
@@ -188,8 +262,8 @@ export default function TranslateView() {
             {acceptedId && (
               <span className="text-xs text-green-400 ml-auto">Saved!</span>
             )}
-          </div>
-        )}
+          </>)}
+        </div>
 
         {translatingChapter && (
           <div className={`px-4 py-2 border-b flex items-center gap-2 ${
@@ -208,9 +282,9 @@ export default function TranslateView() {
               ) : (
                 <span className="text-sm text-cyan-300">
                   {llmStatus || 'Translating...'}
-                  {segments.length > 0 && (
+                  {segs.length > 0 && (
                     <span className="text-cyan-400/70 ml-2">
-                      ({segments.filter(s => s.translation).length}/{segments.length} segments)
+                      ({segs.filter(s => s.translation).length}/{segs.length} segments)
                     </span>
                   )}
                 </span>
@@ -249,7 +323,7 @@ export default function TranslateView() {
                 <Languages size={40} className="mx-auto mb-4 text-cyan-500" />
                 <h3 className="text-lg font-medium text-gray-200 mb-2">Ready to Translate</h3>
                 <p className="text-sm text-gray-500 mb-2">
-                  This chapter has <strong className="text-gray-300">{segments.length} segments</strong>.
+                  This chapter has <strong className="text-gray-300">{segs.length} segments</strong>.
                 </p>
                 <p className="text-xs text-gray-600 mb-6">
                   The AI will translate each segment with context from surrounding paragraphs,

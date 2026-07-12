@@ -7,9 +7,11 @@ interface ContextBarProps {
 }
 
 export default function ContextBar({ showContext, onToggleContext }: ContextBarProps) {
-  const { novel, chapters } = useProjectStore()
-  const totalChapters = chapters.length
-  const translatedChapters = chapters.filter(c => c.translated).length
+  const novel = useProjectStore(s => s.novel)
+  const chapters = useProjectStore(s => s.chapters)
+  const chapterList = chapters || []
+  const totalChapters = chapterList.length
+  const translatedChapters = chapterList.filter(c => c.translated).length
 
   return (
     <div className="flex items-center gap-4 px-4 py-2 bg-gray-900 border-b border-gray-800 text-xs">

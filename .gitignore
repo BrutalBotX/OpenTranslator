@@ -5,6 +5,10 @@ dist/
 *.log
 npm-debug.log*
 
+# Test
+test/
+PLAN.md
+
 # Python
 __pycache__/
 *.pyc

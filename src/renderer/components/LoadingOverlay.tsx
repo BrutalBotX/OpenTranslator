@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, AlertTriangle, RefreshCw, CheckCircle2 } from 'lucide-react'
 import { useStatusStore } from '../stores/statusStore'
 import { api } from '../services/apiClient'
@@ -10,9 +10,11 @@ const STEPS = [
 ]
 
 export default function LoadingOverlay() {
-  const { backendStatus, backendError } = useStatusStore()
+  const { backendStatus, backendError, appVersion } = useStatusStore()
   const [currentStep, setCurrentStep] = useState(0)
   const [chromadbReady, setChromadbReady] = useState(false)
+  const [chromadbError, setChromadbError] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     if (backendStatus !== 'connecting') return
@@ -24,20 +26,37 @@ export default function LoadingOverlay() {
 
   useEffect(() => {
     if (backendStatus !== 'connecting' || chromadbReady) return
-    const poll = setInterval(async () => {
+    let attempts = 0
+    pollRef.current = setInterval(async () => {
+      attempts++
       try {
-        const status = await api.get<{ chromadb: string }>('/init/status')
+        const status = await api.get<{ chromadb: string; error?: string }>('/init/status')
         if (status.chromadb === 'ready') {
           setChromadbReady(true)
           setCurrentStep(2)
-          clearInterval(poll)
+          if (pollRef.current) clearInterval(pollRef.current)
         } else if (status.chromadb === 'error') {
-          clearInterval(poll)
+          setChromadbError(status.error || 'ChromaDB initialization failed')
+          if (pollRef.current) clearInterval(pollRef.current)
+        } else if (attempts >= 30) {
+          setChromadbError('Translation memory timed out (60s). Proceeding without it.')
+          if (pollRef.current) clearInterval(pollRef.current)
         }
-      } catch { clearInterval(poll) }
+      } catch {
+        if (attempts >= 30) {
+          setChromadbError('Backend init status unreachable.')
+          if (pollRef.current) clearInterval(pollRef.current)
+        }
+      }
     }, 2000)
-    return () => clearInterval(poll)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [backendStatus, chromadbReady])
+
+  useEffect(() => {
+    if (chromadbError && currentStep < 2) {
+      setCurrentStep(2)
+    }
+  }, [chromadbError, currentStep])
 
   if (backendStatus !== 'connecting' && backendStatus !== 'error') return null
 
@@ -50,7 +69,7 @@ export default function LoadingOverlay() {
             <h2 className="text-lg font-bold text-gray-100 mb-2">Startup Error</h2>
             <p className="text-sm text-gray-400 mb-2">OpenTranslator could not start.</p>
             {backendError && (
-              <p className="text-xs text-red-300 bg-red-900/20 rounded p-2 mb-4 font-mono break-words">
+              <p className="text-xs text-red-300 bg-red-900/20 rounded p-2 mb-4 font-mono break-words whitespace-pre-wrap">
                 {backendError}
               </p>
             )}
@@ -63,22 +82,30 @@ export default function LoadingOverlay() {
           <>
             <div className="mb-6">
               <h1 className="text-xl font-bold text-cyan-400 mb-1">OpenTranslator</h1>
-              <p className="text-xs text-gray-500">v0.2.0</p>
+              <p className="text-xs text-gray-500">v{appVersion || '0.0.0'}</p>
             </div>
             <div className="space-y-3 text-left">
               {STEPS.map((step, i) => {
                 const isActive = i === currentStep
                 const isDone = i < currentStep
+                const isError = i === 1 && chromadbError
                 return (
-                  <div key={step.id} className={`flex items-center gap-3 text-sm ${isDone ? 'text-green-400' : isActive ? 'text-cyan-300' : 'text-gray-600'}`}>
-                    {isDone ? (
+                  <div key={step.id} className={`flex items-center gap-3 text-sm ${isDone ? (isError ? 'text-yellow-400' : 'text-green-400') : isActive ? 'text-cyan-300' : 'text-gray-600'}`}>
+                    {isDone && !isError ? (
                       <CheckCircle2 size={16} className="shrink-0" />
+                    ) : isError ? (
+                      <AlertTriangle size={16} className="shrink-0 text-yellow-400" />
                     ) : isActive ? (
                       <Loader2 size={16} className="animate-spin shrink-0 text-cyan-400" />
                     ) : (
                       <div className="w-4 h-4 shrink-0" />
                     )}
-                    <span>{step.label}</span>
+                    <div>
+                      <span>{step.label}</span>
+                      {i === 1 && chromadbError && (
+                        <p className="text-xs text-yellow-500 mt-0.5">{chromadbError}</p>
+                      )}
+                    </div>
                   </div>
                 )
               })}

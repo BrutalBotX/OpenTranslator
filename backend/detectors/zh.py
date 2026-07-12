@@ -11,7 +11,6 @@ PRONOUN_RULES = [
     (r"她们", "Pronoun '她们' (they/them, female) detected. Which group does this refer to?"),
 ]
 
-CHENGYU_PATTERN = re.compile(r"[\u4e00-\u9fff]{4}")
 CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
 
 COMMON_CHENGYU = [
@@ -29,9 +28,6 @@ CULTURE_TERMS = [
     "轮回", "因果", "业力", "天道", "法则", "混沌", "鸿蒙",
 ]
 
-KNOWN_CULTURE_MAP = {t: t for t in CULTURE_TERMS}
-
-
 class ChineseDetector(BaseDetector):
     def __init__(self):
         self.idiom_set = set(COMMON_CHENGYU)
@@ -45,11 +41,10 @@ class ChineseDetector(BaseDetector):
         for pattern, question in PRONOUN_RULES:
             for match in re.finditer(pattern, text):
                 pos = match.start()
-                context = text[max(0, pos - 25):pos + 25]
                 issues.append({
                     "type": "Pronoun",
                     "question": question,
-                    "context": context,
+                    "context": text[max(0, pos - 25):pos + 25],
                     "suggestions": [],
                     "position": pos
                 })

@@ -4,7 +4,7 @@ import time
 from sqlalchemy import select
 
 from backend.db.database import async_session
-from backend.db.models import Segment, Chapter, Novel, QAItem
+from backend.db.models import Segment, Chapter, Novel, QAItem, Character
 from backend.pipeline.context_gatherer import ContextGatherer
 from backend.pipeline.ambiguity_detector import AmbiguityDetector
 from backend.pipeline.translator import Translator
@@ -12,7 +12,7 @@ from backend.db.vector_store import add_to_tm
 from backend.api.settings import get_cached
 from backend.utils.transliteration import transliterate
 
-SEG_PATTERN = re.compile(r'\[SEG (\d+)\]\s*\n(.*?)(?=\[SEG \d+\]|\Z)', re.DOTALL)
+SEG_PATTERN = re.compile(r'\[SEG (\d+)\]\s*[\r\n]+(.*?)(?=\[SEG \d+\]|\Z)', re.DOTALL)
 WINDOW_SIZE = 3
 
 _progress: dict[str, dict] = {}
@@ -132,15 +132,68 @@ class ChapterTranslator:
             )
             if issues:
                 first_seg_id = segs[0]["id"]
+                groups: dict[tuple[str, str], list[dict]] = {}
+                for issue in issues:
+                    key = (issue["type"], issue["question"])
+                    if key not in groups:
+                        groups[key] = []
+                    groups[key].append(issue)
+
+                from backend.db.models import GlossaryTerm
                 async with async_session() as sess:
-                    for issue in issues:
+                    existing_names = await sess.execute(
+                        select(Character.name).where(Character.novel_id == novel_id)
+                    )
+                    existing_name_set = {row[0] for row in existing_names.all()}
+
+                    existing_terms_result = await sess.execute(
+                        select(GlossaryTerm.source_term).where(GlossaryTerm.novel_id == novel_id)
+                    )
+                    existing_terms_set = {row[0] for row in existing_terms_result.all()}
+
+                    for (qtype, qtext), group in groups.items():
+                        count = len(group)
+                        suggestions = group[0].get("suggestions", [])
+                        if count > 1:
+                            suggestions = [s for s in suggestions if "×" not in s]
+                            suggestions.insert(0, f"(×{count} occurrences — answer once for all)")
                         sess.add(QAItem(
-                            segment_id=first_seg_id, question_type=issue["type"],
-                            question=issue["question"], context_snippet=issue.get("context", ""),
-                            suggestions=issue.get("suggestions", []),
+                            segment_id=first_seg_id, question_type=qtype,
+                            question=qtext, context_snippet=group[0].get("context", ""),
+                            suggestions=suggestions,
                         ))
+
+                        if qtype == "Name":
+                            import re
+                            m = re.search(r'"([^"]+)"', qtext)
+                            if m:
+                                name = m.group(1)
+                                if name not in existing_name_set:
+                                    from backend.utils.transliteration import suggest_gender
+                                    gender = suggest_gender(name) or "Unknown"
+                                    sess.add(Character(
+                                        novel_id=novel_id, name=name,
+                                        name_variants=[name], gender=gender,
+                                        role="Potential", status="Pending Review",
+                                    ))
+                                    existing_name_set.add(name)
+
+                        if qtype == "Cultural":
+                            import re
+                            m = re.search(r'"([^"]+)"', qtext)
+                            if m:
+                                term = m.group(1)
+                                if term not in existing_terms_set and len(term) >= 2:
+                                    sess.add(GlossaryTerm(
+                                        novel_id=novel_id,
+                                        source_term=term,
+                                        target_term=term,
+                                        category="Term",
+                                    ))
+                                    existing_terms_set.add(term)
+
                     await sess.commit()
-                total_qa += len(issues)
+                total_qa += len(groups)
 
             _progress[chapter_id].update({
                 "current_batch": batch_index + 1,
@@ -203,29 +256,29 @@ class ChapterTranslator:
 
             parsed = self._parse_batch_response(translated, segs)
 
-            for seg_data in segs:
-                seg_num = seg_data["segment_number"]
-                translation = parsed.get(seg_num, "")
-                seg_id = seg_data["id"]
-                idx = seg_data["segment_number"] - 1
+            async with async_session() as batch_sess:
+                for seg_data in segs:
+                    seg_num = seg_data["segment_number"]
+                    translation = parsed.get(seg_num, "")
+                    seg_id = seg_data["id"]
+                    idx = seg_data["segment_number"] - 1
 
-                async with async_session() as session:
-                    db_seg = await session.get(Segment, seg_id)
+                    db_seg = await batch_sess.get(Segment, seg_id)
                     if db_seg:
                         db_seg.translation = translation
                         db_seg.status = "translated"
-                        await session.commit()
 
-                if translation:
-                    add_to_tm(segment_id=seg_id, source_text=seg_data["source_text"],
-                              target_text=translation, novel_id=novel_id, chapter_id=chapter_id)
+                    if translation:
+                        add_to_tm(segment_id=seg_id, source_text=seg_data["source_text"],
+                                  target_text=translation, novel_id=novel_id, chapter_id=chapter_id)
 
-                all_translations[idx] = {
-                    "id": seg_id, "segment_number": seg_num,
-                    "source_text": seg_data["source_text"], "translation": translation,
-                    "status": "translated", "has_qa": bool(issues),
-                    "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
-                }
+                    all_translations[idx] = {
+                        "id": seg_id, "segment_number": seg_num,
+                        "source_text": seg_data["source_text"], "translation": translation,
+                        "status": "translated", "has_qa": bool(issues),
+                        "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
+                    }
+                await batch_sess.commit()
 
             translated_count = len([t for t in all_translations if t and t.get("translation")])
             print(f"[translate_chapter] Batch {batch_index + 1}/{total_batches} done ({translated_count}/{total} translated so far)")

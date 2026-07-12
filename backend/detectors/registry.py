@@ -18,8 +18,4 @@ class DetectorRegistry:
     def get_detector(self, lang: str) -> BaseDetector | None:
         return self._detectors.get(lang)
 
-    def detect(self, text: str, lang: str, known_names: list[str], known_terms: list[str]) -> list[dict]:
-        detector = self.get_detector(lang)
-        if detector:
-            return detector.detect(text, known_names, known_terms)
-        return []
+

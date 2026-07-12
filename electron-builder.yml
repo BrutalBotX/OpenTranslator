@@ -6,22 +6,33 @@ files:
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron/*'
+  - '!**/*.map'
   - '!{electron.vite.config.ts,postcss.config.js,tailwind.config.js,tsconfig*.json}'
 extraResources:
   - from: backend/
     to: backend/
     filter:
       - '**/*.py'
-      - 'requirements.txt'
+  - from: .
+    to: .
+    filter:
+      - requirements.txt
 win:
   target:
     - nsis
   artifactName: ${name}-${version}-setup.${ext}
 nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  license: LICENSE.txt
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  createStartMenuShortcut: true
+  installerSidebar: null
+  runAfterFinish: true
 mac:
   target:
     - dmg

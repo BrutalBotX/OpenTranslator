@@ -1,41 +1,16 @@
 import re
-from pypinyin import pinyin, Style
+from pypinyin import lazy_pinyin, Style
 
 CJK_RANGE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 
-BASIC_JA_ROMAJI = {
-    "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
-    "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
-    "さ": "sa", "し": "shi", "す": "su", "せ": "se", "そ": "so",
-    "た": "ta", "ち": "chi", "つ": "tsu", "て": "te", "と": "to",
-    "な": "na", "に": "ni", "ぬ": "nu", "ね": "ne", "の": "no",
-    "は": "ha", "ひ": "hi", "ふ": "fu", "へ": "he", "ほ": "ho",
-    "ま": "ma", "み": "mi", "む": "mu", "め": "me", "も": "mo",
-    "や": "ya", "ゆ": "yu", "よ": "yo",
-    "ら": "ra", "り": "ri", "る": "ru", "れ": "re", "ろ": "ro",
-    "わ": "wa", "を": "wo", "ん": "n",
-    "が": "ga", "ぎ": "gi", "ぐ": "gu", "げ": "ge", "ご": "go",
-    "ざ": "za", "じ": "ji", "ず": "zu", "ぜ": "ze", "ぞ": "zo",
-    "だ": "da", "ぢ": "ji", "づ": "zu", "で": "de", "ど": "do",
-    "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
-    "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
-    "きゃ": "kya", "きゅ": "kyu", "きょ": "kyo",
-    "しゃ": "sha", "しゅ": "shu", "しょ": "sho",
-    "ちゃ": "cha", "ちゅ": "chu", "ちょ": "cho",
-    "にゃ": "nya", "にゅ": "nyu", "にょ": "nyo",
-    "ひゃ": "hya", "ひゅ": "hyu", "ひょ": "hyo",
-    "みゃ": "mya", "みゅ": "myu", "みょ": "myo",
-    "りゃ": "rya", "りゅ": "ryu", "りょ": "ryo",
-    "ぎゃ": "gya", "ぎゅ": "gyu", "ぎょ": "gyo",
-    "じゃ": "ja", "じゅ": "ju", "じょ": "jo",
-    "びゃ": "bya", "びゅ": "byu", "びょ": "byo",
-    "ぴゃ": "pya", "ぴゅ": "pyu", "ぴょ": "pyo",
-}
+_MALE_INDICATORS = {"伟", "强", "明", "龙", "刚", "浩", "军", "勇", "飞", "超", "杰", "涛", "斌", "磊", "峰"}
+_FEMALE_INDICATORS = {"美", "丽", "芳", "娟", "静", "琳", "婷", "娜", "洁", "萍", "雪", "瑶", "玲", "婷", "霞", "敏"}
 
-HANGUL_BASIC = {
-    "가": "ga", "나": "na", "다": "da", "라": "ra", "마": "ma",
-    "바": "ba", "사": "sa", "아": "a", "자": "ja", "차": "cha",
-    "카": "ka", "타": "ta", "파": "pa", "하": "ha",
+COMMON_SURNAMES = {
+    "李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴",
+    "徐", "孙", "胡", "朱", "高", "林", "何", "郭", "马", "罗",
+    "梁", "宋", "郑", "谢", "韩", "唐", "冯", "于", "董", "萧",
+    "程", "曹", "袁", "邓", "许", "傅", "沈", "曾", "彭", "吕",
 }
 
 
@@ -43,29 +18,41 @@ def transliterate_zh(text: str) -> str:
     if not CJK_RANGE.search(text):
         return ""
     try:
-        result = pinyin(text, style=Style.TONE3, neutral_tone_with_five=True)
-        return " ".join(item[0] for item in result)
+        return " ".join(lazy_pinyin(text, style=Style.TONE))
+    except Exception:
+        return ""
+
+
+def _ja_romaji(text: str) -> str:
+    try:
+        import pykakasi
+        kks = pykakasi.kakasi()
+        result = kks.convert(text)
+        return " ".join(item["hepburn"] for item in result)
     except Exception:
         return ""
 
 
 def transliterate_ja(text: str) -> str:
-    result = []
-    for ch in text:
-        if ch in BASIC_JA_ROMAJI:
-            result.append(BASIC_JA_ROMAJI[ch])
-        elif CJK_RANGE.match(ch):
-            result.append(ch)
-        else:
-            result.append(ch)
-    return " ".join(result)
+    if not CJK_RANGE.search(text) and not any("\u3040" <= c <= "\u30ff" for c in text):
+        return ""
+    return _ja_romaji(text)
 
 
 def transliterate_ko(text: str) -> str:
     result = []
     for ch in text:
-        if ch in HANGUL_BASIC:
-            result.append(HANGUL_BASIC[ch])
+        if "\uac00" <= ch <= "\ud7af":
+            try:
+                import unicodedata
+                name = unicodedata.name(ch, "")
+                parts = name.replace("HANGUL SYLLABLE ", "").split()
+                if parts:
+                    result.append(parts[0].lower())
+                else:
+                    result.append(ch)
+            except Exception:
+                result.append(ch)
         elif CJK_RANGE.match(ch):
             result.append(ch)
         else:
@@ -84,3 +71,17 @@ def transliterate(text: str, source_lang: str) -> str:
     elif source_lang == "ko":
         return transliterate_ko(text)
     return ""
+
+
+def suggest_gender(name: str) -> str | None:
+    if not name or len(name) < 2:
+        return None
+    if name in COMMON_SURNAMES or (len(name) <= 2 and name[0] in COMMON_SURNAMES):
+        return None
+    last_char = name[-1]
+    last_two = name[-2:] if len(name) >= 2 else ""
+    if last_char in _FEMALE_INDICATORS or last_two in {"子", "儿"}:
+        return "Female"
+    if last_char in _MALE_INDICATORS:
+        return "Male"
+    return None

@@ -1,12 +1,5 @@
-from datetime import datetime
-
-
-class EPUBExporter:
+class MarkdownExporter:
     def export(self, title: str, chapters: list[dict], segments_by_chapter: list[list[dict]], novel_id: str = "") -> str:
-        text_content = self._build_text(title, chapters, segments_by_chapter)
-        return text_content
-
-    def _build_text(self, title: str, chapters: list[dict], segments_by_chapter: list[list[dict]]) -> str:
         lines = [f"# {title}", ""]
         for i, chapter in enumerate(chapters):
             ch_title = chapter.get("title")

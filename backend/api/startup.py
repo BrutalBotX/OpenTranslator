@@ -17,8 +17,14 @@ async def _init_chromadb():
     try:
         from backend.db.vector_store import _get_collection
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _get_collection)
+        await asyncio.wait_for(
+            loop.run_in_executor(None, _get_collection),
+            timeout=30.0,
+        )
         _init_status["chromadb"] = "ready"
+    except asyncio.TimeoutError:
+        _init_status["chromadb"] = "error"
+        _init_status["error"] = "ChromaDB init timed out (30s). ONNX model may be slow to load on first run."
     except Exception as e:
         _init_status["chromadb"] = "error"
         _init_status["error"] = str(e)

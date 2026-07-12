@@ -14,8 +14,9 @@ interface TranslationCompletePopupProps {
 }
 
 export default function TranslationCompletePopup({ result, onGoToReview, onDismiss }: TranslationCompletePopupProps) {
-  const previewSegments = result.segments.slice(0, 3)
-  const warnings = result.segments.filter(s => s.status === 'needs_review')
+  const segments = result.segments || []
+  const previewSegments = segments.slice(0, 3)
+  const warnings = segments.filter((s: any) => s.status === 'needs_review')
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onDismiss}>
@@ -52,8 +53,8 @@ export default function TranslationCompletePopup({ result, onGoToReview, onDismi
               <p className="text-sm text-gray-100 border-t border-gray-700 pt-2">{seg.translation}</p>
             </div>
           ))}
-          {result.segments.length > 3 && (
-            <p className="text-center text-sm text-gray-500">... and {result.segments.length - 3} more segments</p>
+          {segments.length > 3 && (
+            <p className="text-center text-sm text-gray-500">... and {segments.length - 3} more segments</p>
           )}
         </div>
 

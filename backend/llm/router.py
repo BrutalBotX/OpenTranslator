@@ -61,6 +61,7 @@ class LLMRouter:
                 fallback_model = fallback["model"]
                 fb_base_url = fallback.get("base_url") or None
                 fb_api_key = fallback.get("api_key") or None
+                timeout = int(get_cached("llm_timeout", "60"))
                 response = await acompletion(
                     model=fallback_model,
                     messages=[
@@ -70,7 +71,8 @@ class LLMRouter:
                     temperature=0.3,
                     max_tokens=4096,
                     base_url=fb_base_url,
-                    api_key=fb_api_key
+                    api_key=fb_api_key,
+                    timeout=timeout,
                 )
                 return response.choices[0].message.content
             raise

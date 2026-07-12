@@ -11,31 +11,37 @@ from backend.api.settings import load_cache
 from backend.api.startup import trigger_chromadb_init
 from backend.db.database import engine, Base
 
-app = FastAPI(title="OpenTranslator Backend", version="0.1.0")
+app = FastAPI(title="OpenTranslator Backend", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.on_event("startup")
 async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        print(f"[startup] Failed to create database tables: {e}")
+        return
 
-        def run_migrations(sync_conn):
-            import sqlite3
-            cursor = sync_conn.connection.cursor()
-            cursor.execute("PRAGMA table_info(novels)")
-            cols = {row[1] for row in cursor.fetchall()}
-            if "instructions" not in cols:
-                cursor.execute("ALTER TABLE novels ADD COLUMN instructions TEXT DEFAULT ''")
-                print("[migration] Added 'instructions' column to novels table")
-
-        await conn.run_sync(run_migrations)
+    try:
+        async with engine.begin() as conn:
+            def run_migrations(sync_conn):
+                import sqlite3
+                cursor = sync_conn.connection.cursor()
+                cursor.execute("PRAGMA table_info(novels)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if "instructions" not in cols:
+                    cursor.execute("ALTER TABLE novels ADD COLUMN instructions TEXT DEFAULT ''")
+                    print("[migration] Added 'instructions' column to novels table")
+            await conn.run_sync(run_migrations)
+    except Exception as e:
+        print(f"[startup] Migration failed: {e}")
 
     try:
         await load_cache()
@@ -48,7 +54,14 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    import json, os
+    vf = os.path.join(os.path.dirname(os.path.dirname(__file__)), "version.json")
+    try:
+        with open(vf) as f:
+            ver = json.load(f).get("version", "0.0.0")
+    except Exception:
+        ver = "0.0.0"
+    return {"status": "ok", "version": ver}
 
 app.include_router(translate.router, prefix="/api")
 app.include_router(context.router, prefix="/api")

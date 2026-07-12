@@ -1,3 +1,4 @@
+from backend.detectors.base import merge_pronoun_issues
 from backend.detectors.registry import DetectorRegistry
 
 
@@ -28,4 +29,4 @@ class AmbiguityDetector:
             if issue["id"] not in resolved_ids:
                 issues.append(issue)
 
-        return issues
+        return merge_pronoun_issues(issues)

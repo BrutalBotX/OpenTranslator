@@ -73,7 +73,16 @@ export default function ProjectHome() {
         <div className="flex items-center justify-between mb-8">
           <h2 className="text-2xl font-bold">Projects</h2>
           <div className="flex gap-3">
-            <button onClick={() => window.electronAPI.openProject()}
+            <button onClick={async () => {
+                try {
+                  const result = await window.electronAPI.openProject()
+                  if (result) {
+                    const id = result.data?.id
+                    if (id) { await loadNovel(id); navigate(`/translate/${id}`) }
+                    else setError('Invalid project file')
+                  }
+                } catch (e: any) { setError(e?.message || 'Failed to open project') }
+              }}
               className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
               <FolderOpen size={16} /> Open Project
             </button>
@@ -99,7 +108,12 @@ export default function ProjectHome() {
             <p className="text-gray-600 text-sm mb-6">Create a new project or open an existing one to get started</p>
             <div className="flex gap-3 justify-center">
               <button onClick={() => setShowNew(true)} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm transition-colors">New Project</button>
-              <button onClick={() => window.electronAPI.openProject()} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Open Existing</button>
+              <button onClick={async () => {
+                  try {
+                    const result = await window.electronAPI.openProject()
+                    if (result?.data?.id) { await loadNovel(result.data.id); navigate(`/translate/${result.data.id}`) }
+                  } catch {} 
+                }} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Open Existing</button>
             </div>
           </div>
         ) : (

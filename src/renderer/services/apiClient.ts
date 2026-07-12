@@ -1,6 +1,7 @@
 const API_BASE = 'http://127.0.0.1:8712/api'
+const DEFAULT_TIMEOUT = 120_000
 
-async function apiFetch<T = any>(path: string, options?: RequestInit, timeoutMs = 10000): Promise<T> {
+async function apiFetch<T = any>(path: string, options?: RequestInit, timeoutMs = DEFAULT_TIMEOUT): Promise<T> {
   const hasIpc = !!window.electronAPI?.fetch
 
   if (hasIpc) {

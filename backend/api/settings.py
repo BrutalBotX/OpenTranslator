@@ -236,6 +236,10 @@ async def fetch_models(provider: str = "", base_url: str = "", api_key: str = ""
     resolved_base = base_url or PROVIDER_BASE_URLS.get(provider, "")
     if not resolved_base:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    import urllib.parse
+    parsed = urllib.parse.urlparse(resolved_base)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Invalid URL scheme")
 
     if provider == "ollama":
         url = f"{resolved_base}/api/tags"
@@ -251,7 +255,7 @@ async def fetch_models(provider: str = "", base_url: str = "", api_key: str = ""
     headers = {"Content-Type": "application/json"}
     if api_key:
         if provider == "google-gemini":
-            url = f"{url}?key={api_key}"
+            headers["x-goog-api-key"] = api_key
         elif provider == "anthropic":
             headers["x-api-key"] = api_key
             headers["anthropic-version"] = "2023-06-01"

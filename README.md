@@ -32,9 +32,15 @@
 
 ### Prebuilt EXE (Windows)
 
-Download `OpenTranslator Setup 0.2.0.exe` from the [releases page](https://github.com/your-org/opentranslator/releases).
+Download the latest installer from the [releases page](https://github.com/your-org/opentranslator/releases) or build directly:
 
-**Prerequisites**: [Python 3.11+](https://www.python.org/downloads/) with pip installed and on PATH.
+```
+dist/opentranslator-0.2.0-setup.exe
+```
+
+**Prerequisites**: [Python 3.11+](https://www.python.org/downloads/) with pip installed and on PATH. Run `pip install -r requirements.txt` after installing Python.
+
+> See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ### From source
 
@@ -56,6 +62,7 @@ npm run dev
 
 ## Quick Start
 
+0. **Sample chapters** — Pre-made test files are in [`test/`](test/): Chinese (cultivation), Japanese, and Korean chapters. Use these to quickly test all features.
 1. **Launch** — OpenTranslator starts a Python backend (FastAPI on port 8712) automatically via Electron
 2. **Create a project** — Click "New Project", set source/target language and genre
 3. **Import a chapter** — Click the Import button, select a `.txt` file (one paragraph per line = one segment)

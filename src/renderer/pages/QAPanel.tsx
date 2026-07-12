@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { MessageSquare, CheckCircle, Clock, AlertCircle, Loader2, RefreshCw, ChevronDown, ChevronRight, Languages } from 'lucide-react'
+import { MessageSquare, CheckCircle, Clock, Loader2, RefreshCw, ChevronDown, ChevronRight, Languages } from 'lucide-react'
 import { api } from '../services/apiClient'
 
 interface QAItem {
@@ -9,7 +9,7 @@ interface QAItem {
   question_type: string
   question: string
   context_snippet: string
-  suggestions: string[]
+  suggestions?: string[] | null
   answer: string | null
   resolved: boolean
   segment_source_text: string
@@ -34,10 +34,15 @@ export default function QAPanel() {
     api.get<QAItem[]>(`/questions${params}`).then(data => setItems(data)).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [novelId])
+  useEffect(() => {
+    let mounted = true
+    const params = novelId ? `?resolved=false&novel_id=${novelId}` : '?resolved=false'
+    api.get<QAItem[]>(`/questions${params}`).then(data => { if (mounted) setItems(data) }).finally(() => { if (mounted) setLoading(false) })
+    return () => { mounted = false }
+  }, [novelId])
 
-  const submitAnswer = async (id: string, retranslate = false) => {
-    const answer = answers[id]?.trim()
+  const submitAnswer = async (id: string, retranslate = false, overrideAnswer?: string) => {
+    const answer = overrideAnswer || answers[id]?.trim()
     if (!answer) return
     if (retranslate) {
       setRetranslating(id)
@@ -183,10 +188,10 @@ export default function QAPanel() {
                           {item.context_snippet && (
                             <p className="text-xs text-gray-500 mb-3 italic bg-gray-800/50 p-2 rounded">"{item.context_snippet}"</p>
                           )}
-                          {item.suggestions.length > 0 && (
+                          {(item.suggestions?.length ?? 0) > 0 && (
                             <div className="flex flex-wrap gap-2 mb-3">
-                              {item.suggestions.map((s, i) => (
-                                <button key={i} onClick={() => { setAnswers(prev => ({ ...prev, [item.id]: s })); submitAnswer(item.id, true) }}
+                              {(item.suggestions || []).map((s, i) => (
+                                <button key={i} onClick={() => { setAnswers(prev => ({ ...prev, [item.id]: s })); submitAnswer(item.id, true, s) }}
                                   className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">{s}</button>
                               ))}
                             </div>

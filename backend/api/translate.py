@@ -77,7 +77,11 @@ async def translate_all_chapters(chapter_id: str, req: TranslateAllRequest):
             chapter_id=chapter_id,
             novel_id=req.novel_id,
         )
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()

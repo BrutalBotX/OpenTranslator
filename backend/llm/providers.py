@@ -79,5 +79,4 @@ class ProviderConfig:
             "max_context": known.get("max_context", 128000),
         }
 
-    def register_custom(self, name: str, base_url: str, api_key: Optional[str] = None):
-        self.KNOWN_PROVIDERS[name] = {"base_url": base_url, "max_context": 128000}
+

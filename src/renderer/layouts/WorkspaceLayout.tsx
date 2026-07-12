@@ -15,7 +15,7 @@ function langName(code: string): string {
 }
 
 export default function WorkspaceLayout() {
-  const { novel } = useProjectStore()
+  const novel = useProjectStore(s => s.novel)
   const location = useLocation()
 
   const novelId = novel?.id

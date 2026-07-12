@@ -1,4 +1,3 @@
-from backend.pipeline.segmenter import Segmenter
 from backend.pipeline.context_gatherer import ContextGatherer
 from backend.pipeline.ambiguity_detector import AmbiguityDetector
 from backend.pipeline.translator import Translator
@@ -7,7 +6,6 @@ from backend.pipeline.post_processor import PostProcessor
 
 class TranslationPipeline:
     def __init__(self):
-        self.segmenter = Segmenter()
         self.context_gatherer = ContextGatherer()
         self.ambiguity_detector = AmbiguityDetector()
         self.translator = Translator()

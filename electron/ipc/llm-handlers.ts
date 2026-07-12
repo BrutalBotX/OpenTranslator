@@ -6,7 +6,7 @@ export function registerLLMHandlers(): void {
   ipcMain.handle('http:fetch', async (_event, endpoint: string, options?: any) => {
     const url = `${BACKEND_URL}${endpoint}`
     let response: Response | null = null
-    const timeoutMs = 65_000
+    const timeoutMs = 300_000 // 5min — backend handles its own llm_timeout internally
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -36,6 +36,16 @@ export function registerLLMHandlers(): void {
       throw new Error(`${response.status}: ${text.slice(0, 200)}`)
     }
 
-    return response.json()
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.includes('application/json')) {
+      const text = await response.text().catch(() => '')
+      throw new Error(`Expected JSON but got ${contentType}: ${text.slice(0, 100)}`)
+    }
+
+    try {
+      return await response.json()
+    } catch {
+      throw new Error('Invalid JSON response from backend')
+    }
   })
 }

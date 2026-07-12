@@ -20,6 +20,15 @@ class GlossaryCreate(BaseModel):
     gender_hint: str = ""
 
 
+class GlossaryUpdate(BaseModel):
+    source_term: Optional[str] = None
+    target_term: Optional[str] = None
+    category: Optional[str] = None
+    context_note: Optional[str] = None
+    is_name: Optional[bool] = None
+    gender_hint: Optional[str] = None
+
+
 class GlossaryResponse(BaseModel):
     id: str
     novel_id: str
@@ -49,11 +58,12 @@ async def create_glossary_term(data: GlossaryCreate, session: AsyncSession = Dep
 
 
 @router.put("/glossary/{term_id}", response_model=GlossaryResponse)
-async def update_glossary_term(term_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+async def update_glossary_term(term_id: str, data: GlossaryUpdate, session: AsyncSession = Depends(get_session)):
     term = await session.get(GlossaryTerm, term_id)
     if not term:
         raise HTTPException(status_code=404, detail="Glossary term not found")
-    for key, value in data.items():
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
         setattr(term, key, value)
     await session.commit()
     await session.refresh(term)

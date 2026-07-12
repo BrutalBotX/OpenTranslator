@@ -33,6 +33,7 @@ interface ProjectState {
   loadNovel: (id: string) => Promise<void>
   fetchChapters: (novelId: string) => Promise<void>
   importChapter: (novelId: string, title: string, content: string) => Promise<Chapter>
+  deleteChapter: (chapterId: string, novelId: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
 }
 
@@ -44,7 +45,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   fetchProjects: async () => {
     try {
-      const projects = await api.get('/projects')
+      const projects = await api.get<Novel[]>('/projects')
       set({ projects })
     } catch { /* fail silently — ProjectHome retries */ }
   },
@@ -52,6 +53,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   createProject: async (data) => {
     const novel = await api.post<Novel>('/projects', data)
     set({ novel, chapters: [] })
+    const savePath = (data as any).save_dir || null
+    try {
+      await window.electronAPI.saveProject({
+        id: novel.id, title: novel.title,
+        source_lang: novel.source_lang, target_lang: novel.target_lang,
+        genre: novel.genre, savePath,
+      })
+    } catch (e) { console.error('Failed to save .novelproj', e) }
     return novel
   },
 
@@ -80,6 +89,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const chapter = await api.post<Chapter>('/chapters/import', { novel_id: novelId, title, content })
     await get().fetchChapters(novelId)
     return chapter
+  },
+
+  deleteChapter: async (chapterId, novelId) => {
+    await api.delete(`/chapters/${chapterId}`)
+    await get().fetchChapters(novelId)
   },
 
   deleteProject: async (id) => {

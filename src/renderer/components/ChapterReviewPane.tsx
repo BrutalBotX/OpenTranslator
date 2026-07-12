@@ -13,7 +13,8 @@ interface ChapterReviewPaneProps {
   novelId?: string | null
 }
 
-export default function ChapterReviewPane({ segments, activeSegmentId, onSelectSegment, onEdit, onAccept, chapterId, novelId }: ChapterReviewPaneProps) {
+export default function ChapterReviewPane({ segments: rawSegments, activeSegmentId, onSelectSegment, onEdit, onAccept, chapterId, novelId }: ChapterReviewPaneProps) {
+  const segments = Array.isArray(rawSegments) ? rawSegments : []
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [applyingQa, setApplyingQa] = useState(false)
   const [qaApplied, setQaApplied] = useState(false)

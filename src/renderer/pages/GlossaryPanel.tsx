@@ -28,7 +28,13 @@ export default function GlossaryPanel() {
     api.get<GlossaryTerm[]>(`/glossary?novel_id=${novelId}`).then(data => setTerms(data)).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [novelId])
+  useEffect(() => {
+    let mounted = true
+    if (!novelId) return
+    setLoading(true)
+    api.get<GlossaryTerm[]>(`/glossary?novel_id=${novelId}`).then(data => { if (mounted) setTerms(data) }).finally(() => { if (mounted) setLoading(false) })
+    return () => { mounted = false }
+  }, [novelId])
 
   const add = async () => {
     if (!form.source_term.trim() || !form.target_term.trim() || !novelId) return

@@ -63,68 +63,64 @@ def parse_instruction(instruction: str) -> list[dict]:
     return results
 
 
-def apply_instruction_actions(actions: list[dict], novel_id: str):
+async def apply_instruction_actions(actions: list[dict], novel_id: str):
     from sqlalchemy import select
     from backend.db.database import async_session
     from backend.db.models import Character, GlossaryTerm
-    import asyncio
 
-    async def _apply():
-        async with async_session() as session:
-            for action in actions:
-                if action["action"] == "replace_name":
-                    existing = await session.execute(
-                        select(Character).where(
-                            Character.novel_id == novel_id,
-                            Character.name.ilike(action["source"]),
+    async with async_session() as session:
+        for action in actions:
+            if action["action"] == "replace_name":
+                existing = await session.execute(
+                    select(Character).where(
+                        Character.novel_id == novel_id,
+                        Character.name.ilike(action["source"]),
+                    )
+                )
+                char = existing.scalar_one_or_none()
+                if char:
+                    variants = list(char.name_variants or [])
+                    if action["target"] not in variants:
+                        variants.append(action["target"])
+                        char.name_variants = variants
+                else:
+                    existing_term = await session.execute(
+                        select(GlossaryTerm).where(
+                            GlossaryTerm.novel_id == novel_id,
+                            GlossaryTerm.source_term.ilike(action["source"]),
                         )
                     )
-                    char = existing.scalar_one_or_none()
-                    if char:
-                        variants = list(char.name_variants or [])
-                        if action["target"] not in variants:
-                            variants.append(action["target"])
-                            char.name_variants = variants
-                    else:
-                        existing_term = await session.execute(
-                            select(GlossaryTerm).where(
-                                GlossaryTerm.novel_id == novel_id,
-                                GlossaryTerm.source_term.ilike(action["source"]),
-                            )
-                        )
-                        term = existing_term.scalar_one_or_none()
-                        if not term:
-                            session.add(GlossaryTerm(
-                                novel_id=novel_id,
-                                source_term=action["source"],
-                                target_term=action["target"],
-                                category="Name",
-                            ))
-
-                elif action["action"] == "add_alias":
-                    existing = await session.execute(
-                        select(Character).where(
-                            Character.novel_id == novel_id,
-                            Character.name.ilike(action["character"]),
-                        )
-                    )
-                    char = existing.scalar_one_or_none()
-                    if char:
-                        variants = list(char.name_variants or [])
-                        if action["alias"] not in variants:
-                            variants.append(action["alias"])
-                            char.name_variants = variants
-                    else:
-                        new_char = Character(
+                    term = existing_term.scalar_one_or_none()
+                    if not term:
+                        session.add(GlossaryTerm(
                             novel_id=novel_id,
-                            name=action["character"].title(),
-                            name_variants=[action["alias"]],
-                            gender="Unknown",
-                            role="Supporting",
-                            status="Alive",
-                        )
-                        session.add(new_char)
+                            source_term=action["source"],
+                            target_term=action["target"],
+                            category="Name",
+                        ))
 
-            await session.commit()
+            elif action["action"] == "add_alias":
+                existing = await session.execute(
+                    select(Character).where(
+                        Character.novel_id == novel_id,
+                        Character.name.ilike(action["character"]),
+                    )
+                )
+                char = existing.scalar_one_or_none()
+                if char:
+                    variants = list(char.name_variants or [])
+                    if action["alias"] not in variants:
+                        variants.append(action["alias"])
+                        char.name_variants = variants
+                else:
+                    new_char = Character(
+                        novel_id=novel_id,
+                        name=action["character"].title(),
+                        name_variants=[action["alias"]],
+                        gender="Unknown",
+                        role="Supporting",
+                        status="Alive",
+                    )
+                    session.add(new_char)
 
-    asyncio.run(_apply())
+        await session.commit()

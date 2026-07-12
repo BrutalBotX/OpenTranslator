@@ -48,7 +48,7 @@ interface TranslationState {
   loadSegments: (chapterId: string) => Promise<void>
   setActiveSegment: (id: string | null) => void
   updateSegment: (id: string, updates: Partial<Segment>) => void
-  setSegments: (segments: Segment[]) => void
+  setSegments: (segments: Segment[] | ((prev: Segment[]) => Segment[])) => void
   setTranslatingId: (id: string | null) => void
   setViewMode: (mode: ViewMode) => void
   translateChapter: (chapterId: string, novelId: string) => Promise<void>
@@ -95,7 +95,13 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
       segments: state.segments.map(s => (s.id === id ? { ...s, ...updates } : s))
     })),
 
-  setSegments: (segments) => set({ segments }),
+  setSegments: (segments) => {
+    if (typeof segments === 'function') {
+      set({ segments: segments(get().segments) })
+    } else {
+      set({ segments })
+    }
+  },
 
   setTranslatingId: (id) => set({ translatingId: id }),
 
@@ -105,6 +111,9 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
     set({ translatingChapter: true, chapterProgress: { current: 0, total: 0 }, showCompletionPopup: false, translateError: null, llmStatus: '' })
     try {
       const result = await api.post<ChapterTranslationResult>(`/chapters/${chapterId}/translate-all`, { novel_id: novelId })
+      if (!result || !Array.isArray(result.segments)) {
+        throw new Error(result?.error || 'Translation returned invalid data')
+      }
       set({
         segments: result.segments,
         translatingChapter: false,

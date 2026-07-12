@@ -1,6 +1,7 @@
 {
   "name": "opentranslator",
-  "version": "0.2.0",
+  "version": "0.5.0",
+  "author": "OpenTranslator",
   "description": "AI-powered webnovel translation workstation",
   "main": "./out/main/index.js",
   "scripts": {
@@ -11,6 +12,7 @@
     "backend:dev": "cd backend && uvicorn main:app --reload --port 8712",
     "backend:start": "cd backend && uvicorn main:app --port 8712",
     "lint": "tsc --noEmit",
+    "version:bump": "node scripts/bump-version.js",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
