@@ -2,7 +2,7 @@
 
 **AI-powered webnovel translation workstation** — batch-translate Chinese, Japanese, and Korean webnovels into English with persistent character and glossary management.
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.5.0-blue)
 ![electron](https://img.shields.io/badge/electron-31.3-blue)
 ![python](https://img.shields.io/badge/python-3.11%2B-green)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -32,11 +32,8 @@
 
 ### Prebuilt EXE (Windows)
 
-Download the latest installer from the [releases page](https://github.com/your-org/opentranslator/releases) or build directly:
+Download the latest installer from the [releases page](https://github.com/BrutalBotX/opentranslator/releases) or build directly.
 
-```
-dist/opentranslator-0.2.0-setup.exe
-```
 
 **Prerequisites**: [Python 3.11+](https://www.python.org/downloads/) with pip installed and on PATH. Run `pip install -r requirements.txt` after installing Python.
 
@@ -62,7 +59,6 @@ npm run dev
 
 ## Quick Start
 
-0. **Sample chapters** — Pre-made test files are in [`test/`](test/): Chinese (cultivation), Japanese, and Korean chapters. Use these to quickly test all features.
 1. **Launch** — OpenTranslator starts a Python backend (FastAPI on port 8712) automatically via Electron
 2. **Create a project** — Click "New Project", set source/target language and genre
 3. **Import a chapter** — Click the Import button, select a `.txt` file (one paragraph per line = one segment)
