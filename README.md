@@ -2,7 +2,7 @@
 
 **AI-powered webnovel translation workstation** — batch-translate Chinese, Japanese, and Korean webnovels into English with persistent character and glossary management.
 
-![version](https://img.shields.io/badge/version-0.5.0-blue)
+![version](https://img.shields.io/badge/version-0.6.6-blue)
 ![electron](https://img.shields.io/badge/electron-31.3-blue)
 ![python](https://img.shields.io/badge/python-3.11%2B-green)
 ![license](https://img.shields.io/badge/license-MIT-green)
