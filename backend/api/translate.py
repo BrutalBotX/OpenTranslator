@@ -1,3 +1,5 @@
+import asyncio
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +13,22 @@ from backend.db.models import Chapter, Segment
 from backend.db.vector_store import add_to_tm
 
 router = APIRouter()
+
+_SENSITIVE_PATTERNS = [
+    re.compile(r'(sk-[a-zA-Z0-9]{10,})'),
+    re.compile(r'(AIza[a-zA-Z0-9_-]{10,})'),
+    re.compile(r'(api[_-]?key["\']?\s*[:=]\s*["\']?)([^"\'&\s]{4})([^"\'&\s]+)', re.IGNORECASE),
+]
+
+
+def sanitize_error(msg: str) -> str:
+    for pattern in _SENSITIVE_PATTERNS:
+        msg = pattern.sub(r'\1***REDACTED***', msg)
+    if len(msg) > 300:
+        msg = msg[:300] + '...'
+    return msg
+
+
 pipeline = TranslationPipeline()
 
 
@@ -45,7 +63,8 @@ async def translate_segment(req: TranslateRequest, session: AsyncSession = Depen
                 await session.commit()
 
                 if translation_text:
-                    add_to_tm(
+                    await asyncio.to_thread(
+                        add_to_tm,
                         segment_id=req.segment_id,
                         source_text=req.source_text,
                         target_text=translation_text,
@@ -59,7 +78,7 @@ async def translate_segment(req: TranslateRequest, session: AsyncSession = Depen
             questions_pending=result.get("questions_pending", False),
         )
     except Exception as e:
-        detail = str(e)
+        detail = sanitize_error(str(e))
         raise HTTPException(status_code=503, detail=detail)
 
 
@@ -99,6 +118,13 @@ async def cancel_chapter_translation(chapter_id: str):
     return {"cancelled": True}
 
 
+@router.get("/tm/search")
+async def search_tm(query: str, novel_id: str, n_results: int = 3):
+    from backend.db.vector_store import search_similar
+    results = await asyncio.to_thread(lambda: search_similar(query, novel_id, n_results=n_results))
+    return {"results": results}
+
+
 @router.post("/chapters/{chapter_id}/apply-qa")
 async def apply_qa_chapter(chapter_id: str, req: TranslateAllRequest):
     try:
@@ -111,6 +137,8 @@ async def apply_qa_chapter(chapter_id: str, req: TranslateAllRequest):
         raise HTTPException(status_code=503, detail=str(e))
 
 
+VALID_SEGMENT_STATUSES = {"untouched", "translating", "translated", "needs_review"}
+
 class SaveTranslationRequest(BaseModel):
     translation: str
     status: str = "translated"
@@ -122,12 +150,15 @@ async def save_segment(segment_id: str, data: SaveTranslationRequest, session: A
     segment = await session.get(Segment, segment_id)
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
+    if data.status not in VALID_SEGMENT_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Invalid status: '{data.status}'")
     segment.translation = data.translation
     segment.status = data.status
     await session.commit()
 
     if data.translation and data.novel_id:
-        add_to_tm(
+        await asyncio.to_thread(
+            add_to_tm,
             segment_id=segment_id,
             source_text=segment.source_text,
             target_text=data.translation,
@@ -136,3 +167,23 @@ async def save_segment(segment_id: str, data: SaveTranslationRequest, session: A
         )
 
     return {"saved": True}
+
+
+class BatchUpdateRequest(BaseModel):
+    segment_ids: list[str]
+    status: str = "translated"
+    novel_id: str = ""
+
+
+@router.put("/segments/batch", response_model=dict)
+async def batch_update_segments(data: BatchUpdateRequest, session: AsyncSession = Depends(get_session)):
+    if data.status not in VALID_SEGMENT_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Invalid status: '{data.status}'")
+    result = await session.execute(
+        select(Segment).where(Segment.id.in_(data.segment_ids))
+    )
+    segments = result.scalars().all()
+    for seg in segments:
+        seg.status = data.status
+    await session.commit()
+    return {"updated": len(segments)}

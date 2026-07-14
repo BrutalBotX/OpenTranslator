@@ -95,6 +95,7 @@ SETTINGS_DEFAULTS = {
     "default_project_dir": "",
     "batch_size": "4",
     "llm_timeout": "60",
+    "auto_backup_interval": "0",
 }
 
 SETTINGS_META = {
@@ -113,34 +114,45 @@ SETTINGS_META = {
         "description": "Higher = faster but may affect quality. 4 is recommended. 8+ may cause issues."},
     "llm_timeout": {"label": "LLM Timeout (seconds)", "type": "range", "min": 10, "max": 300, "step": 5,
         "description": "Max seconds to wait for an LLM response before aborting. 60s is recommended for most providers."},
+    "auto_backup_interval": {"label": "Auto-backup interval", "type": "select", "options": ["0", "1", "3", "5", "10"], "labels": {"0": "Disabled", "1": "Every chapter", "3": "Every 3 chapters", "5": "Every 5 chapters", "10": "Every 10 chapters"},
+        "description": "Automatically save .novelproj backup after translating N chapters. 0 = disabled."},
 }
 
+import threading
+
+_cache_lock = threading.Lock()
 _cache: dict[str, str] | None = None
 
 
 def get_cached(key: str, default: str = "") -> str:
-    if _cache is not None:
-        return _cache.get(key, default)
+    global _cache
+    with _cache_lock:
+        if _cache is not None:
+            return _cache.get(key, default)
     return SETTINGS_DEFAULTS.get(key, default)
 
 
 async def _load(session: AsyncSession) -> dict[str, str]:
     global _cache
-    if _cache is not None:
-        return _cache
+    with _cache_lock:
+        if _cache is not None:
+            return _cache
     result = await session.execute(select(Setting))
     rows = result.scalars().all()
-    _cache = dict(SETTINGS_DEFAULTS)
+    cache = dict(SETTINGS_DEFAULTS)
     for row in rows:
-        _cache[row.key] = row.value
+        cache[row.key] = row.value
+    with _cache_lock:
+        _cache = cache
     return _cache
 
 
 async def _save(key: str, value: str, session: AsyncSession):
     global _cache
-    if _cache is None:
-        _cache = dict(SETTINGS_DEFAULTS)
-    _cache[key] = value
+    with _cache_lock:
+        if _cache is None:
+            _cache = dict(SETTINGS_DEFAULTS)
+        _cache[key] = value
     row = await session.get(Setting, key)
     if row:
         row.value = value
@@ -154,10 +166,12 @@ async def load_cache():
     global _cache
     from backend.db.database import async_session
     async with async_session() as session:
-        _cache = dict(SETTINGS_DEFAULTS)
         result = await session.execute(select(Setting))
+        cache = dict(SETTINGS_DEFAULTS)
         for row in result.scalars().all():
-            _cache[row.key] = row.value
+            cache[row.key] = row.value
+        with _cache_lock:
+            _cache = cache
 
 
 def reset_cache():

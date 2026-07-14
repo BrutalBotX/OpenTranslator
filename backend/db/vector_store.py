@@ -1,13 +1,16 @@
 import os
-os.environ["ORT_LOGGING_LEVEL"] = "3"
+os.environ["ORT_LOGGING_LEVEL"] = "4"  # 4 = FATAL only
 os.environ["ORT_TENSORRT_DISABLE"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-# Suppress onnxruntime C-level warnings by setting severity to FATAL
+import logging
+logging.getLogger("onnxruntime").setLevel(logging.ERROR)
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
 try:
     import onnxruntime
-    onnxruntime.set_default_logger_severity(4)  # 4 = FATAL only
+    onnxruntime.set_default_logger_severity(4)
 except Exception:
     pass
 
@@ -17,6 +20,10 @@ from chromadb.utils import embedding_functions
 
 from backend.config import settings
 
+import threading
+
+_client_lock = threading.Lock()
+_collection_lock = threading.Lock()
 _client = None
 _tm_collection = None
 _ef = None
@@ -25,10 +32,12 @@ _ef = None
 def _get_client():
     global _client
     if _client is None:
-        _client = chromadb.PersistentClient(
-            path=settings.chroma_persist_dir,
-            settings=ChromaSettings(anonymized_telemetry=False)
-        )
+        with _client_lock:
+            if _client is None:
+                _client = chromadb.PersistentClient(
+                    path=settings.chroma_persist_dir,
+                    settings=ChromaSettings(anonymized_telemetry=False)
+                )
     return _client
 
 
@@ -36,16 +45,19 @@ def _get_collection():
     global _tm_collection, _ef
     if _tm_collection is not None:
         return _tm_collection
-    client = _get_client()
-    try:
-        import onnxruntime
-        onnxruntime.set_default_logger_severity(4)
-    except Exception:
-        pass
-    if _ef is None:
-        _ef = embedding_functions.DefaultEmbeddingFunction()
-    _tm_collection = client.get_or_create_collection("translation_memory", embedding_function=_ef)
-    return _tm_collection
+    with _collection_lock:
+        if _tm_collection is not None:
+            return _tm_collection
+        client = _get_client()
+        try:
+            import onnxruntime
+            onnxruntime.set_default_logger_severity(4)
+        except Exception:
+            pass
+        if _ef is None:
+            _ef = embedding_functions.DefaultEmbeddingFunction()
+        _tm_collection = client.get_or_create_collection("translation_memory", embedding_function=_ef)
+        return _tm_collection
 
 
 def search_similar(source_text: str, novel_id: str, n_results: int = 5) -> list[dict]:

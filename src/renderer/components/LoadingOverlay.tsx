@@ -4,8 +4,8 @@ import { useStatusStore } from '../stores/statusStore'
 import { api } from '../services/apiClient'
 
 const STEPS = [
-  { id: 'backend', label: 'Starting Python backend...' },
-  { id: 'chromadb', label: 'Loading translation memory...' },
+  { id: 'backend', label: 'Initializing...' },
+  { id: 'chromadb', label: 'Loading...' },
   { id: 'ready', label: 'Ready' },
 ]
 
@@ -16,19 +16,20 @@ export default function LoadingOverlay() {
   const [chromadbError, setChromadbError] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Step 0 → Step 1 when backend health check succeeds
   useEffect(() => {
-    if (backendStatus !== 'connecting') return
-    if (currentStep === 0) {
-      const t = setTimeout(() => setCurrentStep(1), 3000)
-      return () => clearTimeout(t)
+    if (currentStep === 0 && backendStatus === 'connected') {
+      setCurrentStep(1)
     }
   }, [backendStatus, currentStep])
 
+  // Step 1: Poll ChromaDB init status
+  const attemptsRef = useRef(0)
   useEffect(() => {
-    if (backendStatus !== 'connecting' || chromadbReady) return
-    let attempts = 0
+    if (backendStatus !== 'connected' || chromadbReady || currentStep !== 1) return
+    attemptsRef.current = 0
     pollRef.current = setInterval(async () => {
-      attempts++
+      attemptsRef.current++
       try {
         const status = await api.get<{ chromadb: string; error?: string }>('/init/status')
         if (status.chromadb === 'ready') {
@@ -38,19 +39,19 @@ export default function LoadingOverlay() {
         } else if (status.chromadb === 'error') {
           setChromadbError(status.error || 'ChromaDB initialization failed')
           if (pollRef.current) clearInterval(pollRef.current)
-        } else if (attempts >= 30) {
-          setChromadbError('Translation memory timed out (60s). Proceeding without it.')
+        } else if (attemptsRef.current >= 15) {
+          setChromadbError('Loading timed out. Proceeding without cache.')
           if (pollRef.current) clearInterval(pollRef.current)
         }
       } catch {
-        if (attempts >= 30) {
+        if (attemptsRef.current >= 15) {
           setChromadbError('Backend init status unreachable.')
           if (pollRef.current) clearInterval(pollRef.current)
         }
       }
     }, 2000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [backendStatus, chromadbReady])
+  }, [backendStatus, chromadbReady, currentStep])
 
   useEffect(() => {
     if (chromadbError && currentStep < 2) {
@@ -58,7 +59,10 @@ export default function LoadingOverlay() {
     }
   }, [chromadbError, currentStep])
 
-  if (backendStatus !== 'connecting' && backendStatus !== 'error') return null
+  // Stay visible until backend is connected AND chromadb is ready (or errored)
+  const showOverlay = backendStatus === 'connecting' || backendStatus === 'error' ||
+    (backendStatus === 'connected' && !chromadbReady && !chromadbError && currentStep < 2)
+  if (!showOverlay) return null
 
   return (
     <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm">

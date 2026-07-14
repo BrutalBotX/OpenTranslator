@@ -1,5 +1,7 @@
+import { useEffect } from 'react'
 import { useStatusStore } from '../stores/statusStore'
 import { useProjectStore } from '../stores/projectStore'
+import { Sun, Moon } from 'lucide-react'
 
 const statusConfig = {
   connecting: { dot: 'bg-yellow-500', text: 'Connecting...', textColor: 'text-yellow-400' },
@@ -13,6 +15,8 @@ export default function StatusBar() {
   const activity = useStatusStore(s => s.activity)
   const progress = useStatusStore(s => s.progress)
   const appVersion = useStatusStore(s => s.appVersion)
+  const theme = useStatusStore(s => s.theme)
+  const setTheme = useStatusStore(s => s.setTheme)
   const novel = useProjectStore(s => s.novel)
   const chapters = useProjectStore(s => s.chapters)
   const cls = chapters || []
@@ -21,6 +25,10 @@ export default function StatusBar() {
   const statusLabel = backendStatus === 'error' && backendError ? `Error: ${backendError.slice(0, 60)}` : (cfg?.text || 'Unknown')
 
   const progressPct = progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
+
+  useEffect(() => {
+    document.documentElement.className = theme === 'light' ? 'theme-light' : ''
+  }, [theme])
 
   return (
     <div className="h-7 bg-gray-900 border-t border-gray-800 flex items-center px-3 text-xs shrink-0 gap-3">
@@ -51,6 +59,11 @@ export default function StatusBar() {
             <span>{cls.length} chapter{cls.length !== 1 ? 's' : ''}</span>
           </>
         )}
+        <span className="text-gray-700">|</span>
+        <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="text-gray-500 hover:text-gray-300 transition-colors" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
+          {theme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
+        </button>
         <span className="text-gray-700">|</span>
         <span className="text-gray-600">v{appVersion || '0.0.0'}</span>
       </div>

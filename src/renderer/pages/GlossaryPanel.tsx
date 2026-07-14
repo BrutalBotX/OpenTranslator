@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Search, Loader2, Trash2, X } from 'lucide-react'
+import { Plus, Search, Loader2, Trash2, X, Pencil } from 'lucide-react'
 import { api } from '../services/apiClient'
 
 interface GlossaryTerm {
@@ -20,6 +20,8 @@ export default function GlossaryPanel() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showAdd, setShowAdd] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({ target_term: '', category: 'Term', context_note: '' })
   const [form, setForm] = useState({ source_term: '', target_term: '', category: 'Term', context_note: '' })
 
   const load = () => {
@@ -46,6 +48,19 @@ export default function GlossaryPanel() {
 
   const remove = async (id: string) => { await api.delete(`/glossary/${id}`); load() }
 
+  const startEdit = (t: GlossaryTerm) => {
+    setEditId(t.id)
+    setEditForm({ target_term: t.target_term, category: t.category, context_note: t.context_note })
+  }
+
+  const saveEdit = async (id: string) => {
+    try {
+      await api.put(`/glossary/${id}`, editForm)
+      setEditId(null)
+      load()
+    } catch {}
+  }
+
   const filtered = terms.filter(t =>
     t.source_term.toLowerCase().includes(search.toLowerCase()) ||
     t.target_term.toLowerCase().includes(search.toLowerCase())
@@ -63,11 +78,40 @@ export default function GlossaryPanel() {
         <div className="space-y-2">
           {filtered.map(t => (
             <div key={t.id} className="p-3 bg-gray-900 rounded-lg border border-gray-800 hover:border-gray-700 transition-colors group">
-              <div className="flex items-center justify-between">
-                <div><span className="font-medium text-cyan-300">{t.source_term}</span><span className="text-gray-500 mx-2">→</span><span>{t.target_term}</span><span className="ml-2 px-2 py-0.5 bg-gray-800 text-gray-400 text-xs rounded">{t.category}</span></div>
-                <button onClick={() => remove(t.id)} className="p-1.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
-              </div>
-              {t.context_note && <p className="text-xs text-gray-500 mt-1">{t.context_note}</p>}
+              {editId === t.id ? (
+                <div className="space-y-2" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-cyan-300 text-sm">{t.source_term}</span>
+                    <span className="text-gray-500">→</span>
+                    <input type="text" value={editForm.target_term}
+                      onChange={e => setEditForm({ ...editForm, target_term: e.target.value })}
+                      className="flex-1 bg-gray-800 border border-cyan-700 rounded px-2 py-1 text-sm focus:outline-none" />
+                    <select value={editForm.category} onChange={e => setEditForm({ ...editForm, category: e.target.value })}
+                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none">
+                      {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-1">
+                    <input type="text" value={editForm.context_note}
+                      onChange={e => setEditForm({ ...editForm, context_note: e.target.value })}
+                      placeholder="Context note"
+                      className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none" />
+                    <button onClick={() => saveEdit(t.id)} className="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 rounded text-xs text-cyan-200">Save</button>
+                    <button onClick={() => setEditId(null)} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><span className="font-medium text-cyan-300">{t.source_term}</span><span className="text-gray-500 mx-2">→</span><span>{t.target_term}</span><span className="ml-2 px-2 py-0.5 bg-gray-800 text-gray-400 text-xs rounded">{t.category}</span></div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => startEdit(t)} className="p-1.5 text-gray-600 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-all"><Pencil size={14} /></button>
+                      <button onClick={() => remove(t.id)} className="p-1.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                  {t.context_note && <p className="text-xs text-gray-500 mt-1">{t.context_note}</p>}
+                </>
+              )}
             </div>
           ))}
           {filtered.length === 0 && !loading && <p className="text-center text-gray-600 text-sm py-8">No glossary terms yet</p>}

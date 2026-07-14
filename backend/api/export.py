@@ -7,7 +7,7 @@ from backend.db.database import get_session
 from backend.db.models import Novel, Chapter, Segment
 from backend.export.html import HTMLExporter
 from backend.export.plaintext import PlainTextExporter
-from backend.export.epub import MarkdownExporter
+from backend.export.epub import EPUBExporter
 
 router = APIRouter()
 
@@ -15,6 +15,8 @@ router = APIRouter()
 class ExportRequest(BaseModel):
     novel_id: str
     format: str
+    include_source: bool = False
+    show_numbers: bool = False
 
 
 @router.post("/export")
@@ -28,6 +30,8 @@ async def export_novel(req: ExportRequest, session: AsyncSession = Depends(get_s
     )
     chapters = result.scalars().all()
     chapter_ids = [ch.id for ch in chapters]
+    if not chapter_ids:
+        return {"content": "", "filename": f"{novel.title}.txt"}
 
     seg_result = await session.execute(
         select(Segment).where(Segment.chapter_id.in_(chapter_ids)).order_by(Segment.segment_number)
@@ -53,12 +57,14 @@ async def export_novel(req: ExportRequest, session: AsyncSession = Depends(get_s
 
     elif req.format == "html":
         exporter = HTMLExporter()
-        content = exporter.export(novel.title, chapters_data, segments_by_chapter)
+        content = exporter.export(novel.title, chapters_data, segments_by_chapter,
+                                  include_source=req.include_source, show_numbers=req.show_numbers)
         return {"content": content, "format": "html"}
 
     elif req.format == "epub":
-        exporter = MarkdownExporter()
-        content = exporter.export(novel.title, chapters_data, segments_by_chapter, novel_id=novel.id)
-        return {"content": content, "format": "markdown", "filename": f"{novel.title}.md"}
+        exporter = EPUBExporter()
+        raw = exporter.export(novel.title, chapters_data, segments_by_chapter, novel_id=novel.id)
+        import base64
+        return {"content": base64.b64encode(raw).decode(), "format": "epub", "filename": f"{novel.title}.epub"}
 
     raise HTTPException(status_code=400, detail=f"Unsupported format: {req.format}")

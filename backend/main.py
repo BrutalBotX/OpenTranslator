@@ -1,5 +1,5 @@
 import os
-os.environ["ORT_LOGGING_LEVEL"] = "3"
+os.environ["ORT_LOGGING_LEVEL"] = "4"
 os.environ["ORT_TENSORRT_DISABLE"] = "1"
 
 from fastapi import FastAPI
@@ -10,6 +10,9 @@ from backend.api import startup as startup_api
 from backend.api.settings import load_cache
 from backend.api.startup import trigger_chromadb_init
 from backend.db.database import engine, Base
+from backend.utils.logging import setup_logging
+
+log = setup_logging()
 
 app = FastAPI(title="OpenTranslator Backend", version="0.2.0")
 
@@ -26,7 +29,7 @@ async def startup():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
-        print(f"[startup] Failed to create database tables: {e}")
+        log.error("Failed to create database tables", exc_info=e)
         return
 
     try:

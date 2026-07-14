@@ -6,7 +6,7 @@ from typing import Optional
 
 from backend.db.database import get_session
 from backend.db.models import Character, Novel
-from backend.utils.transliteration import transliterate, suggest_gender
+from backend.utils.transliteration import transliterate, suggest_gender, infer_gender
 
 router = APIRouter()
 
@@ -37,12 +37,13 @@ class CharacterResponse(BaseModel):
     id: str
     novel_id: str
     name: str
-    name_variants: list[str]
-    gender: str
-    role: str
-    status: str
-    state_summary: str
+    name_variants: list[str] = []
+    gender: str = "Unknown"
+    role: str = "Minor"
+    status: str = "Alive"
+    state_summary: str = ""
     transliteration: str = ""
+    gender_reason: str = ""
 
 
 @router.get("/characters", response_model=list[CharacterResponse])
@@ -71,10 +72,13 @@ async def create_character(data: CharacterCreate, session: AsyncSession = Depend
     payload.setdefault("gender", "Unknown")
     payload.setdefault("role", "Minor")
     payload.setdefault("status", "Alive")
+    from typing import Optional as _Optional
+    gender_reason: _Optional[str] = None
     if payload.get("gender") == "Unknown":
-        suggested = suggest_gender(payload["name"])
-        if suggested:
-            payload["gender"] = suggested
+        inferred = infer_gender(payload["name"])
+        if inferred:
+            payload["gender"] = inferred["gender"]
+            gender_reason = inferred["reason"]
     character = Character(**payload)
     session.add(character)
     await session.commit()
@@ -86,6 +90,7 @@ async def create_character(data: CharacterCreate, session: AsyncSession = Depend
         name_variants=character.name_variants or [], gender=character.gender,
         role=character.role, status=character.status, state_summary=character.state_summary or "",
         transliteration=transliterate(character.name, source_lang),
+        gender_reason=gender_reason or "",
     )
 
 
@@ -99,7 +104,14 @@ async def update_character(character_id: str, data: CharacterUpdate, session: As
         setattr(character, key, value)
     await session.commit()
     await session.refresh(character)
-    return character
+    novel = await session.get(Novel, character.novel_id)
+    source_lang = novel.source_lang if novel else "zh"
+    return CharacterResponse(
+        id=character.id, novel_id=character.novel_id, name=character.name,
+        name_variants=character.name_variants or [], gender=character.gender,
+        role=character.role, status=character.status, state_summary=character.state_summary or "",
+        transliteration=transliterate(character.name, source_lang),
+    )
 
 
 @router.delete("/characters/{character_id}")

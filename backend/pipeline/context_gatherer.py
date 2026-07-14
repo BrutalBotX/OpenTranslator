@@ -1,3 +1,4 @@
+import asyncio
 from sqlalchemy import select
 
 from backend.db.database import async_session
@@ -36,6 +37,7 @@ class ContextGatherer:
             ],
             "glossary": [
                 {
+                    "id": str(g.id),
                     "source_term": g.source_term,
                     "target_term": g.target_term,
                     "category": g.category,
@@ -82,6 +84,6 @@ class ContextGatherer:
 
         tm = []
         if source_text:
-            tm = search_similar(source_text, novel_id)
+            tm = await asyncio.to_thread(search_similar, source_text, novel_id)
 
         return self.gather(novel, chapter, list(characters), list(glossary), list(arcs), translation_memory=tm)

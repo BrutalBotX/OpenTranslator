@@ -35,9 +35,9 @@ class GlossaryResponse(BaseModel):
     source_term: str
     target_term: str
     category: str
-    context_note: str
-    is_name: bool
-    gender_hint: str
+    context_note: str = ""
+    is_name: bool = False
+    gender_hint: str = ""
 
 
 @router.get("/glossary", response_model=list[GlossaryResponse])

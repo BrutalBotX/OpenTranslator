@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Upload, Languages, Loader2, AlertTriangle, Square, Download, Eye, RefreshCw } from 'lucide-react'
+import { Upload, Languages, Loader2, AlertTriangle, Square, Download, Eye, RefreshCw, CheckCheck, X, AlertCircle, Save } from 'lucide-react'
 import ChapterReviewPane from '../components/ChapterReviewPane'
 import ContextBar from '../components/ContextBar'
 import ChapterNav from '../components/ChapterNav'
@@ -28,10 +28,20 @@ export default function TranslateView() {
   const [importing, setImporting] = useState(false)
   const [showContext, setShowContext] = useState(true)
   const [acceptedId, setAcceptedId] = useState<string | null>(null)
+  const [ccIssues, setCcIssues] = useState<any[] | null>(null)
+  const [ccError, setCcError] = useState(false)
+  const [ccLoading, setCcLoading] = useState(false)
+  const [exportOpts, setExportOpts] = useState<{ format: string; include_source: boolean; show_numbers: boolean } | null>(null)
+  const [expSettings, setExpSettings] = useState({ include_source: false, show_numbers: false })
 
+  const novelIdRef = useRef(novelId)
   useEffect(() => {
-    if (novelId && (!novel || novel.id !== novelId)) loadNovel(novelId)
-  }, [novelId, novel, loadNovel])
+    if (novelId && novelId !== novelIdRef.current) {
+      novelIdRef.current = novelId
+      loadNovel(novelId)
+      useTranslationStore.getState().clear()
+    }
+  }, [novelId, loadNovel])
 
   // Auto-select chapter when only 1 exists
   useEffect(() => {
@@ -49,8 +59,8 @@ export default function TranslateView() {
   const checkStatus = async (chapterId: string) => {
     try {
       await api.post(`/chapters/${chapterId}/check-status`)
-    } catch {}
-    if (novelId) await fetchChapters(novelId).catch(() => {})
+    } catch (e) { console.warn('checkStatus failed', e) }
+    if (novelId) await fetchChapters(novelId).catch(e => console.warn('fetchChapters failed', e))
   }
 
   const handleImport = async () => {
@@ -60,7 +70,7 @@ export default function TranslateView() {
       if (result) {
         setImporting(true)
         setActivity('Importing chapter...')
-        await importChapter(novelId, result.name, result.content)
+        await importChapter(novelId, '', result.content)
         setImporting(false)
         setActivity(null)
       }
@@ -78,6 +88,7 @@ export default function TranslateView() {
 
   const handleReapply = async () => {
     if (!activeChapterId || !novelId) return
+    if (translatingChapter) return
     setActivity('Reapplying with updated context...')
     useTranslationStore.setState({ translatingChapter: true, translateError: null })
     try {
@@ -90,28 +101,61 @@ export default function TranslateView() {
     setActivity(null)
   }
 
-  const handleExport = async (format: string) => {
+  const handleExport = async (format: string, opts?: { include_source?: boolean; show_numbers?: boolean }) => {
     if (!novelId) return
     try {
-      const data = await api.post<{ content: string; filename?: string }>('/export', { novel_id: novelId, format })
-      const blob = new Blob([data.content], { type: 'text/plain' })
+      const body: any = { novel_id: novelId, format, ...opts }
+      const data = await api.post<{ content: string; filename?: string }>('/export', body)
+      const mimeTypes: Record<string, string> = { plaintext: 'text/plain', html: 'text/html', epub: 'application/epub+zip' }
+      const mime = mimeTypes[format] || 'text/plain'
+      if (!data.content) throw new Error('No content returned from export')
+      let content: string | Uint8Array = data.content
+      let ext = format === 'html' ? 'html' : format === 'epub' ? 'epub' : 'txt'
+      if (format === 'epub') {
+        const binary = atob(data.content)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        content = bytes
+      }
+      const blob = new Blob([content], { type: mime })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = data.filename || `export.${format === 'html' ? 'html' : 'txt'}`
+      a.download = data.filename || `export.${ext}`
       a.click()
       setTimeout(() => URL.revokeObjectURL(url), 2000)
-    } catch (e) { console.error('Export failed', e) }
+    } catch (e) { console.error('Export failed', e); setActivity('Export failed — check console') }
   }
 
-  const handleAccept = async (segmentId: string) => {
+  const handleSaveProject = async () => {
+    if (!novelId) return
+    setActivity('Saving project...')
+    try {
+      await window.electronAPI.saveProject({ id: novelId })
+    } catch (e) { console.error('Save failed', e) }
+    setActivity(null)
+  }
+
+  const handleConsistencyCheck = async () => {
+    if (!novelId) return
+    setCcLoading(true)
+    try {
+      const data = await api.get<{ issues: any[] }>(`/projects/${novelId}/consistency-check`)
+      setCcIssues(Array.isArray(data?.issues) ? data.issues : [])
+      setCcError(false)
+    } catch (e) { console.warn('Consistency check failed', e); setCcIssues([]); setCcError(true) }
+    setCcLoading(false)
+  }
+
+  const handleAccept = async (segmentId: string, editedTranslation?: string) => {
     const currentSegs = Array.isArray(segments) ? segments : []
     const seg = currentSegs.find(s => s.id === segmentId)
     if (!seg) return
+    const translation = editedTranslation !== undefined ? editedTranslation : seg.translation
     setActivity('Saving...')
     try {
-      await api.put(`/segments/${segmentId}`, { translation: seg.translation, status: 'translated', novel_id: novelId })
-      updateSegment(segmentId, { status: 'translated' })
+      await api.put(`/segments/${segmentId}`, { translation, status: 'translated', novel_id: novelId })
+      updateSegment(segmentId, { translation, status: 'translated' })
       setAcceptedId(segmentId)
       setTimeout(() => setAcceptedId(null), 2000)
     } catch (e) { console.error('Save failed', e) }
@@ -174,11 +218,10 @@ export default function TranslateView() {
           if (progData.status === 'fulfilled') {
             setTranslateProgress(progData.value)
             const prog = progData.value
-            if (prog.status === 'done' && prog.total_batches > 0 && !prog._saved) {
-              const nId = useTranslationStore.getState().activeChapterId
-              if (nId) {
+            if ((prog.status === 'done' && prog.total_batches > 0 && !prog._saved) || prog.trigger_backup) {
+              if (novelId && !prog._saved) {
                 prog._saved = true
-                window.electronAPI.saveProject({ id: nId }).catch(() => {})
+                window.electronAPI.saveProject({ id: novelId }).catch(() => {})
               }
             }
           }
@@ -189,6 +232,47 @@ export default function TranslateView() {
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [translatingChapter, activeChapterId])
+
+  // Keyboard shortcuts — use refs to avoid stale closures and unnecessary listener churn
+  const handleAcceptRef = useRef(handleAccept)
+  handleAcceptRef.current = handleAccept
+  const translatingRef = useRef(translatingChapter)
+  translatingRef.current = translatingChapter
+  const activeChapterRef = useRef(activeChapterId)
+  activeChapterRef.current = activeChapterId
+  const novelRef = useRef(novelId)
+  novelRef.current = novelId
+  const handleTranslateRef = useRef(handleTranslateChapter)
+  handleTranslateRef.current = handleTranslateChapter
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (e.key === 'Escape' && !isInput) {
+        useTranslationStore.getState().setActiveSegment(null)
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !isInput && !translatingRef.current) {
+        e.preventDefault()
+        const cId = activeChapterRef.current
+        const nId = novelRef.current
+        if (cId && nId) handleTranslateRef.current()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        const state = useTranslationStore.getState()
+        const aId = state.activeSegmentId
+        if (aId) {
+          const seg = state.segments.find(s => s.id === aId)
+          if (seg) handleAcceptRef.current(aId)
+        }
+        return
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const segs = Array.isArray(segments) ? segments : []
   const activeSeg = segs.find(s => s.id === activeSegmentId)
@@ -220,6 +304,13 @@ export default function TranslateView() {
           }
         }}
         novelId={novelId}
+        onReorder={async (ids) => {
+          if (!novelId) return
+          try {
+            await api.post(`/projects/${novelId}/reorder-chapters`, { chapter_ids: ids })
+            await fetchChapters(novelId)
+          } catch {}
+        }}
       />
 
       <div className="flex-1 flex flex-col">
@@ -227,23 +318,27 @@ export default function TranslateView() {
 
         <div className="flex items-center gap-2 px-4 py-2 bg-gray-900 border-b border-gray-800">
           <button onClick={handleImport} disabled={importing}
+            title="Import a chapter file (.txt)"
             className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-xs transition-colors">
             {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
             Import
           </button>
           {hasSegments && (<>
             <button onClick={handleTranslateChapter} disabled={translatingChapter}
+              title="Translate all segments in this chapter (Ctrl+Enter)"
               className="flex items-center gap-1 px-2.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded text-xs transition-colors">
               {translatingChapter ? <Loader2 size={12} className="animate-spin" /> : <Languages size={12} />}
               {translatingChapter ? 'Translating...' : 'Translate'}
             </button>
             <button onClick={handleReapply} disabled={translatingChapter}
+              title="Clear all translations and re-translate with updated context"
               className="flex items-center gap-1 px-2.5 py-1.5 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded text-xs transition-colors">
               {translatingChapter ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
               Apply
             </button>
             <div className="w-px h-4 bg-gray-700" />
             <button onClick={handleToggleMode}
+              title={viewMode === 'review' ? 'View translate mode' : 'Review and edit translations'}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded text-xs transition-colors ${
                 viewMode === 'review' ? 'bg-cyan-600/20 text-cyan-300' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
               }`}>
@@ -251,13 +346,45 @@ export default function TranslateView() {
               {viewMode === 'review' ? 'Review' : 'Translate View'}
             </button>
             <div className="w-px h-4 bg-gray-700" />
-            <button onClick={() => handleExport('plaintext')}
+            <div className="relative group">
+              <button title={translatingChapter ? 'Cannot export during translation' : 'Export translated chapter (TXT, HTML, EPUB)'}
+                disabled={translatingChapter}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded text-xs transition-colors ${translatingChapter ? 'bg-gray-900 text-gray-700 cursor-not-allowed' : 'bg-gray-800 hover:bg-gray-700 text-gray-400'}`}>
+                <Download size={12} /> Export ▾
+              </button>
+              <div className={`absolute top-full right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 ${translatingChapter ? 'hidden' : 'hidden group-hover:block'}`}>
+                <div className="p-2 space-y-1">
+                  <p className="text-[10px] text-gray-500 px-2 pt-1">Options</p>
+                  <label className="flex items-center gap-2 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 rounded cursor-pointer">
+                    <input type="checkbox" checked={expSettings.include_source} onChange={e => setExpSettings(prev => ({ ...prev, include_source: e.target.checked }))} />
+                    Include source text
+                  </label>
+                  <label className="flex items-center gap-2 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 rounded cursor-pointer">
+                    <input type="checkbox" checked={expSettings.show_numbers} onChange={e => setExpSettings(prev => ({ ...prev, show_numbers: e.target.checked }))} />
+                    Show segment numbers
+                  </label>
+                  <div className="border-t border-gray-700 my-1" />
+                  <button onClick={() => handleExport('plaintext', expSettings)}
+                    className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 rounded transition-colors">TXT</button>
+                  <button onClick={() => handleExport('html', expSettings)}
+                    className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 rounded transition-colors">HTML</button>
+                  <button onClick={() => handleExport('epub', expSettings)}
+                    className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 rounded transition-colors">EPUB</button>
+                </div>
+              </div>
+            </div>
+            <div className="w-px h-4 bg-gray-700" />
+            <button onClick={handleSaveProject}
+              title="Save project file (.novelproj)"
               className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400 transition-colors">
-              <Download size={12} /> TXT
+              <Save size={12} /> Save
             </button>
-            <button onClick={() => handleExport('html')}
+            <div className="w-px h-4 bg-gray-700" />
+            <button onClick={handleConsistencyCheck} disabled={ccLoading}
+              title="Check for glossary term inconsistencies across all chapters"
               className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400 transition-colors">
-              <Download size={12} /> HTML
+              {ccLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCheck size={12} />}
+              Check
             </button>
             {acceptedId && (
               <span className="text-xs text-green-400 ml-auto">Saved!</span>
@@ -318,22 +445,23 @@ export default function TranslateView() {
               novelId={novelId}
             />
           ) : (
-            <div className="flex-1 p-6 overflow-y-auto bg-gray-950 flex flex-col items-center justify-center">
-              <div className="text-center max-w-lg">
-                <Languages size={40} className="mx-auto mb-4 text-cyan-500" />
-                <h3 className="text-lg font-medium text-gray-200 mb-2">Ready to Translate</h3>
-                <p className="text-sm text-gray-500 mb-2">
-                  This chapter has <strong className="text-gray-300">{segs.length} segments</strong>.
-                </p>
-                <p className="text-xs text-gray-600 mb-6">
-                  The AI will translate each segment with context from surrounding paragraphs,
-                  characters, glossary terms, and plot arcs to maintain consistency.
-                </p>
-                <button onClick={handleTranslateChapter} disabled={translatingChapter}
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
-                  {translatingChapter ? <Loader2 size={16} className="animate-spin" /> : <Languages size={16} />}
-                  {translatingChapter ? 'Translating...' : 'Translate Chapter'}
-                </button>
+            <div className="flex-1 flex flex-col bg-gray-950">
+              <div className="flex-1 overflow-y-auto divide-y divide-gray-800">
+                {segs.map(seg => (
+                  <div key={seg.id} className="p-4 hover:bg-gray-900/50 transition-colors">
+                    <div className="flex items-start gap-4">
+                      <span className="text-xs text-gray-600 font-mono mt-0.5 w-8 shrink-0 text-right">#{seg.segment_number}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-300 leading-relaxed">{seg.source_text}</p>
+                        {seg.transliteration && (
+                          <p className="text-xs text-gray-600 italic mt-1 flex items-center gap-1">
+                            <Languages size={10} /> {seg.transliteration}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -348,6 +476,39 @@ export default function TranslateView() {
           onGoToReview={() => { setViewMode('review'); dismissCompletion() }}
           onDismiss={dismissCompletion}
         />
+      )}
+
+      {ccIssues !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setCcIssues(null); setCcError(false) }}>
+          <div className="bg-gray-900 rounded-xl border border-gray-700 w-full max-w-lg max-h-[70vh] shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold flex items-center gap-2"><CheckCheck size={16} className="text-cyan-400" /> Consistency Check</h3>
+              <button onClick={() => { setCcIssues(null); setCcError(false) }} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {ccError ? (
+                <p className="text-sm text-red-400 text-center py-8">Check failed — could not reach backend.</p>
+              ) : ccIssues.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-8">No issues found. All terms appear consistent.</p>
+              ) : (
+                ccIssues.map((issue, i) => (
+                  <div key={i} className="text-xs bg-gray-800 rounded p-2.5 border border-yellow-800/30">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <AlertCircle size={12} className="text-yellow-400 shrink-0" />
+                      <span className="text-yellow-300 font-medium">{issue.term}</span>
+                      <span className="text-gray-600">→</span>
+                      <span className="text-cyan-300">{issue.expected}</span>
+                    </div>
+                    <p className="text-gray-500">{issue.detail}</p>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="p-4 border-t border-gray-800">
+              <button onClick={() => { setCcIssues(null); setCcError(false) }} className="w-full px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

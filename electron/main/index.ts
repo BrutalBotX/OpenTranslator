@@ -21,8 +21,14 @@ function sendStatus() {
   }
 }
 
+function consumeResponse(res: http.IncomingMessage) {
+  res.on('data', () => {})
+  res.on('end', () => {})
+}
+
 function checkHealth() {
   const req = http.get(`${BACKEND_URL}/health`, (res) => {
+    consumeResponse(res)
     if (res.statusCode === 200) {
       if (_backendStatus !== 'connected') {
         _backendStatus = 'connected'
@@ -48,6 +54,7 @@ function startHealthPoll() {
     if (_backendStatus === 'connected') { clearInterval(interval); return }
     attempts++
     const req = http.get(`${BACKEND_URL}/health`, (res) => {
+      consumeResponse(res)
       if (res.statusCode === 200) {
         _backendStatus = 'connected'
         _backendError = null
@@ -95,7 +102,7 @@ function startBackend(): void {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        ORT_LOGGING_LEVEL: '3',
+        ORT_LOGGING_LEVEL: '4',
         ORT_TENSORRT_DISABLE: '1',
         CUDA_VISIBLE_DEVICES: '-1',
         OT_DATABASE_URL: `sqlite+aiosqlite:///${dbPath.replace(/\\/g, '/')}`,

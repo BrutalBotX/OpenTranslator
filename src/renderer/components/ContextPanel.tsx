@@ -16,6 +16,40 @@ interface ContextData {
   characters: Character[]; glossary: GlossaryTerm[]; plot_arcs: { arc_name: string; summary: string }[]
 }
 
+function GlossaryTermItem({ term, novelId }: { term: any; novelId: string | null }) {
+  const [editing, setEditing] = useState(false)
+  const [target, setTarget] = useState(term.target_term)
+
+  const save = async () => {
+    if (!novelId || !target.trim()) return
+    try {
+      await api.put(`/glossary/${term.id}`, { target_term: target })
+      setEditing(false)
+    } catch {}
+  }
+
+  return (
+    <div className="text-xs bg-gray-800 rounded p-1.5 group" onClick={() => term.id && setEditing(true)}>
+      {editing ? (
+        <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+          <span className="text-cyan-300 shrink-0">{term.source_term} →</span>
+          <input type="text" value={target} onChange={e => setTarget(e.target.value)}
+            className="flex-1 bg-gray-700 border border-cyan-700 rounded px-1 py-0.5 text-xs focus:outline-none"
+            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+            autoFocus />
+          <button onClick={save} className="text-cyan-400 hover:text-cyan-300">✓</button>
+          <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-gray-300">✕</button>
+        </div>
+      ) : (
+        <>
+          <span className="text-cyan-300">{term.source_term}</span><span className="text-gray-600 mx-1">→</span><span className="text-gray-300">{term.target_term}</span><span className="text-gray-600 ml-1">({term.category})</span>
+          {term.context_note && <p className="text-gray-500 mt-0.5">{term.context_note}</p>}
+        </>
+      )}
+    </div>
+  )
+}
+
 interface ContextPanelProps {
   chapterId: string | null; novelId: string | null; open: boolean; onClose: () => void
 }
@@ -25,12 +59,23 @@ export default function ContextPanel({ chapterId, novelId, open, onClose }: Cont
   const [loading, setLoading] = useState(false)
   const [instrHeight, setInstrHeight] = useState(150)
   const dragging = useRef(false)
+  const listenersRef = useRef<{ move: ((e: MouseEvent) => void) | null; up: ((e: MouseEvent) => void) | null }>({ move: null, up: null })
   const panelRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(true)
+  const ctxReqRef = useRef(0)
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false } }, [])
 
   useEffect(() => {
     if (!chapterId || !novelId || !open) return
+    const reqId = ++ctxReqRef.current
     setLoading(true)
-    api.get<ContextData>(`/context/${chapterId}?novel_id=${novelId}`).then(setData).catch(() => setData(null)).finally(() => setLoading(false))
+    api.get<ContextData>(`/context/${chapterId}?novel_id=${novelId}`).then(data => {
+      if (reqId === ctxReqRef.current) setData(data)
+    }).catch(() => {
+      if (reqId === ctxReqRef.current) setData(null)
+    }).finally(() => {
+      if (reqId === ctxReqRef.current) setLoading(false)
+    })
   }, [chapterId, novelId, open])
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -38,6 +83,10 @@ export default function ContextPanel({ chapterId, novelId, open, onClose }: Cont
     dragging.current = true
     const startY = e.clientY
     const startH = instrHeight
+
+    // Remove any previous listeners (safety)
+    if (listenersRef.current.move) document.removeEventListener('mousemove', listenersRef.current.move)
+    if (listenersRef.current.up) document.removeEventListener('mouseup', listenersRef.current.up)
 
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current || !panelRef.current) return
@@ -51,20 +100,30 @@ export default function ContextPanel({ chapterId, novelId, open, onClose }: Cont
       dragging.current = false
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      listenersRef.current = { move: null, up: null }
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
 
+    listenersRef.current = { move: onMove, up: onUp }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
     document.body.style.cursor = 'row-resize'
     document.body.style.userSelect = 'none'
   }, [instrHeight])
 
+  // Clean up global listeners on unmount
+  useEffect(() => () => {
+    if (listenersRef.current.move) document.removeEventListener('mousemove', listenersRef.current.move!)
+    if (listenersRef.current.up) document.removeEventListener('mouseup', listenersRef.current.up!)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }, [])
+
   if (!open) return null
 
   return (
-    <div className="w-64 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0" ref={panelRef}>
+    <div className="w-72 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0" ref={panelRef}>
       <div className="flex-1 overflow-y-auto p-4" style={{ height: `calc(100% - ${instrHeight + 4}px)` }}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Context</h3>
@@ -97,19 +156,16 @@ export default function ContextPanel({ chapterId, novelId, open, onClose }: Cont
                 </div>
               )}
             </div>
-            <div>
-              <div className="flex items-center gap-1.5 mb-2"><BookMarked size={13} className="text-gray-400" /><h4 className="text-xs font-medium text-cyan-400">Glossary ({data.glossary.length})</h4></div>
-              {data.glossary.length === 0 ? (<p className="text-xs text-gray-600">No glossary terms added yet</p>) : (
-                <div className="space-y-1.5">
-                  {data.glossary.map(g => (
-                    <div key={g.source_term} className="text-xs bg-gray-800 rounded p-1.5">
-                      <span className="text-cyan-300">{g.source_term}</span><span className="text-gray-600 mx-1">→</span><span className="text-gray-300">{g.target_term}</span><span className="text-gray-600 ml-1">({g.category})</span>
-                      {g.context_note && <p className="text-gray-500 mt-0.5">{g.context_note}</p>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+    <div>
+      <div className="flex items-center gap-1.5 mb-2"><BookMarked size={13} className="text-gray-400" /><h4 className="text-xs font-medium text-cyan-400">Glossary ({data.glossary.length})</h4></div>
+      {data.glossary.length === 0 ? (<p className="text-xs text-gray-600">No glossary terms added yet</p>) : (
+        <div className="space-y-1.5">
+          {data.glossary.map((g: any) => (
+            <GlossaryTermItem key={g.source_term} term={g} novelId={novelId} />
+          ))}
+        </div>
+      )}
+    </div>
           </div>
         )}
       </div>

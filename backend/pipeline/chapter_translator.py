@@ -1,7 +1,7 @@
 import asyncio
 import re
 import time
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from backend.db.database import async_session
 from backend.db.models import Segment, Chapter, Novel, QAItem, Character
@@ -11,6 +11,9 @@ from backend.pipeline.translator import Translator
 from backend.db.vector_store import add_to_tm
 from backend.api.settings import get_cached
 from backend.utils.transliteration import transliterate
+from backend.utils.logging import get_logger
+
+log = get_logger()
 
 SEG_PATTERN = re.compile(r'\[SEG (\d+)\]\s*[\r\n]+(.*?)(?=\[SEG \d+\]|\Z)', re.DOTALL)
 WINDOW_SIZE = 3
@@ -28,12 +31,15 @@ def get_translate_progress(chapter_id: str) -> dict:
 
 def cancel_translation(chapter_id: str):
     ev = _cancel_events.get(chapter_id)
-    if ev:
+    if ev is None:
+        ev = asyncio.Event()
         ev.set()
-        _progress[chapter_id] = {
-            **_progress.get(chapter_id, {}),
-            "status": "cancelled", "llm_status": "cancelled",
-        }
+        _cancel_events[chapter_id] = ev
+    ev.set()
+    _progress[chapter_id] = {
+        **_progress.get(chapter_id, {}),
+        "status": "cancelled", "llm_status": "cancelled",
+    }
 
 
 class ChapterTranslator:
@@ -79,6 +85,16 @@ class ChapterTranslator:
         if not pending:
             return self._result(all_translations, total, chapter, total_qa)
 
+        _progress[chapter_id] = {
+            "status": "gathering_context",
+            "current_batch": 0,
+            "total_batches": 0,
+            "llm_status": "loading context...",
+            "error": "",
+            "started_at": time.time(),
+            "prefilled": prefill_count,
+        }
+
         novel_context = await self.context_gatherer.gather_async(
             chapter_id=chapter_id, novel_id=novel_id
         )
@@ -108,7 +124,7 @@ class ChapterTranslator:
 
         for batch_index, (batch_start, segs) in enumerate(batches):
             if cancel_ev.is_set():
-                print(f"[translate_chapter] Cancelled at batch {batch_index + 1}/{total_batches}")
+                log.info(f" Cancelled at batch {batch_index + 1}/{total_batches}")
                 for seg_data in segs:
                     idx = seg_data["segment_number"] - 1
                     if all_translations[idx] is None:
@@ -131,14 +147,6 @@ class ChapterTranslator:
                 text=all_text, context=context, novel_id=novel_id,
             )
             if issues:
-                first_seg_id = segs[0]["id"]
-                groups: dict[tuple[str, str], list[dict]] = {}
-                for issue in issues:
-                    key = (issue["type"], issue["question"])
-                    if key not in groups:
-                        groups[key] = []
-                    groups[key].append(issue)
-
                 from backend.db.models import GlossaryTerm
                 async with async_session() as sess:
                     existing_names = await sess.execute(
@@ -151,20 +159,25 @@ class ChapterTranslator:
                     )
                     existing_terms_set = {row[0] for row in existing_terms_result.all()}
 
-                    for (qtype, qtext), group in groups.items():
-                        count = len(group)
-                        suggestions = group[0].get("suggestions", [])
-                        if count > 1:
-                            suggestions = [s for s in suggestions if "×" not in s]
-                            suggestions.insert(0, f"(×{count} occurrences — answer once for all)")
+                    # Map each issue to the segment whose text contains its context snippet
+                    for issue in issues:
+                        ctx = issue.get("context", "")
+                        target_seg_id = segs[0]["id"]
+                        for s in segs:
+                            if ctx and ctx in s["source_text"]:
+                                target_seg_id = s["id"]
+                                break
+
+                        qtype = issue["type"]
+                        qtext = issue["question"]
+                        suggestions = issue.get("suggestions", [])
                         sess.add(QAItem(
-                            segment_id=first_seg_id, question_type=qtype,
-                            question=qtext, context_snippet=group[0].get("context", ""),
+                            segment_id=target_seg_id, question_type=qtype,
+                            question=qtext, context_snippet=ctx,
                             suggestions=suggestions,
                         ))
 
                         if qtype == "Name":
-                            import re
                             m = re.search(r'"([^"]+)"', qtext)
                             if m:
                                 name = m.group(1)
@@ -179,7 +192,6 @@ class ChapterTranslator:
                                     existing_name_set.add(name)
 
                         if qtype == "Cultural":
-                            import re
                             m = re.search(r'"([^"]+)"', qtext)
                             if m:
                                 term = m.group(1)
@@ -193,13 +205,13 @@ class ChapterTranslator:
                                     existing_terms_set.add(term)
 
                     await sess.commit()
-                total_qa += len(groups)
+                total_qa += len(issues)
 
             _progress[chapter_id].update({
                 "current_batch": batch_index + 1,
                 "llm_status": f"calling LLM (batch {batch_index + 1}/{total_batches})",
             })
-            print(f"[translate_chapter] Batch {batch_index + 1}/{total_batches} (segs {segments[batch_start].segment_number}-{segments[min(batch_start + len(segs) - 1, len(segments) - 1)].segment_number}) starting...")
+            log.info(f" Batch {batch_index + 1}/{total_batches} (segs {segments[batch_start].segment_number}-{segments[min(batch_start + len(segs) - 1, len(segments) - 1)].segment_number}) starting...")
 
             prompt = self.translator.prompt_builder.build_batch_prompt(
                 batch_segments=segs, context=context,
@@ -215,7 +227,7 @@ class ChapterTranslator:
                 translated = await asyncio.wait_for(_do_translate(), timeout=batch_timeout)
             except asyncio.TimeoutError:
                 err_msg = f"Batch {batch_index + 1}/{total_batches} timed out after {batch_timeout}s"
-                print(f"[translate_chapter] {err_msg}, skipping")
+                log.info(f" {err_msg}, skipping")
                 _progress[chapter_id].update({"llm_status": f"timeout on batch {batch_index + 1}", "error": err_msg})
                 for seg_data in segs:
                     idx = seg_data["segment_number"] - 1
@@ -229,7 +241,7 @@ class ChapterTranslator:
                 continue
             except (asyncio.CancelledError, Exception) as e:
                 if isinstance(e, (asyncio.CancelledError)) or cancel_ev.is_set():
-                    print(f"[translate_chapter] Cancelled during batch {batch_index + 1}")
+                    log.info(f" Cancelled during batch {batch_index + 1}")
                     for seg_data in segs:
                         idx = seg_data["segment_number"] - 1
                         if all_translations[idx] is None:
@@ -241,7 +253,7 @@ class ChapterTranslator:
                             }
                     break
                 err_msg = f"Batch {batch_index + 1}/{total_batches} failed: {e}"
-                print(f"[translate_chapter] {err_msg}")
+                log.info(f" {err_msg}")
                 _progress[chapter_id].update({"llm_status": f"error on batch {batch_index + 1}", "error": err_msg})
                 for seg_data in segs:
                     idx = seg_data["segment_number"] - 1
@@ -269,20 +281,70 @@ class ChapterTranslator:
                         db_seg.status = "translated"
 
                     if translation:
-                        add_to_tm(segment_id=seg_id, source_text=seg_data["source_text"],
-                                  target_text=translation, novel_id=novel_id, chapter_id=chapter_id)
+                        await asyncio.to_thread(
+                            add_to_tm, segment_id=seg_id,
+                            source_text=seg_data["source_text"],
+                            target_text=translation,
+                            novel_id=novel_id, chapter_id=chapter_id,
+                        )
+
+                    quality_score = 1.0
+                    if bool(issues):
+                        quality_score -= 0.2
+                    if translation and seg_data["source_text"]:
+                        ratio = max(len(seg_data["source_text"]), 1) / max(len(translation), 1)
+                        if ratio < 0.3 or ratio > 5:
+                            quality_score -= 0.15
+                    if quality_score < 0: quality_score = 0
 
                     all_translations[idx] = {
                         "id": seg_id, "segment_number": seg_num,
                         "source_text": seg_data["source_text"], "translation": translation,
                         "status": "translated", "has_qa": bool(issues),
+                        "quality": round(quality_score, 2),
                         "transliteration": transliterate(seg_data["source_text"], novel_context.get("source_lang", "zh")),
                     }
+
+                    if translation and novel_context.get("glossary"):
+                        src_lower = seg_data["source_text"].lower()
+                        tgt_lower = translation.lower()
+                        for g in novel_context["glossary"]:
+                            gsrc = g.get("source_term", "").lower()
+                            gtgt = g.get("target_term", "").lower()
+                            if gsrc and gtgt and gsrc in src_lower and gtgt not in tgt_lower and gsrc in tgt_lower:
+                                dupe = await batch_sess.execute(
+                                    select(QAItem).where(
+                                        QAItem.segment_id == seg_id,
+                                        QAItem.question.contains(g["source_term"]),
+                                    )
+                                )
+                                if dupe.scalar_one_or_none():
+                                    continue
+                                total_qa += 1
+                                batch_sess.add(QAItem(
+                                    segment_id=seg_id, question_type="Cultural",
+                                    question=f'Glossary term "{g["source_term"]}" may not have been translated to "{g["target_term"]}" in output.',
+                                    context_snippet=f'Source: {seg_data["source_text"][:100]}',
+                                    suggestions=[f"Replace with {g['target_term']}", "Keep as-is", "Add alias"],
+                                ))
+
                 await batch_sess.commit()
 
             translated_count = len([t for t in all_translations if t and t.get("translation")])
-            print(f"[translate_chapter] Batch {batch_index + 1}/{total_batches} done ({translated_count}/{total} translated so far)")
+            log.info(f" Batch {batch_index + 1}/{total_batches} done ({translated_count}/{total} translated so far)")
             _progress[chapter_id].update({"llm_status": "done"})
+
+        # Fill remaining None entries for cancelled segments
+        if cancel_ev.is_set():
+            for idx in range(total):
+                if all_translations[idx] is None:
+                    seg = segments[idx]
+                    all_translations[idx] = {
+                        "id": seg.id, "segment_number": seg.segment_number,
+                        "source_text": seg.source_text, "translation": seg.translation or "",
+                        "status": seg.status or "untouched", "has_qa": False,
+                        "transliteration": transliterate(seg.source_text, novel.source_lang),
+                    }
 
         is_cancelled = cancel_ev.is_set()
         _progress[chapter_id].update({
@@ -292,7 +354,7 @@ class ChapterTranslator:
         })
 
         translated_count = len([t for t in all_translations if t and t.get("translation")])
-        print(f"[translate_chapter] {'Cancelled' if is_cancelled else 'Done'}: {translated_count}/{total} segments, {total_qa} QA items in {_progress[chapter_id]['elapsed']:.1f}s")
+        log.info(f" {'Cancelled' if is_cancelled else 'Done'}: {translated_count}/{total} segments, {total_qa} QA items in {_progress[chapter_id]['elapsed']:.1f}s")
 
         if not is_cancelled:
             async with async_session() as session:
@@ -301,13 +363,29 @@ class ChapterTranslator:
                     db_chapter.translated = True
                     await session.commit()
 
+                backup_intra = int(get_cached("auto_backup_interval", "0"))
+                if backup_intra > 0:
+                    cnt = await session.scalar(
+                        select(func.count(Chapter.id)).where(
+                            Chapter.novel_id == novel_id, Chapter.translated == True
+                        )
+                    )
+                    if cnt and cnt % backup_intra == 0:
+                        _progress[chapter_id]["trigger_backup"] = True
+
         _cancel_events.pop(chapter_id, None)
+        _progress.pop(chapter_id, None)
 
         return self._result(all_translations, total, chapter, total_qa)
 
     def _result(self, all_translations, total, chapter, total_qa):
+        segments = []
+        for t in all_translations:
+            if t:
+                t["chapter_id"] = str(chapter.id)
+                segments.append(t)
         return {
-            "segments": [t for t in all_translations if t],
+            "segments": segments,
             "total": total,
             "chapter_title": chapter.title,
             "chapter_number": chapter.number,
@@ -344,49 +422,48 @@ class ChapterTranslator:
         target_segs = [s for s in segments if s.id in updated_seg_ids]
 
         reapplied = []
-        for i in range(0, len(target_segs), batch_size):
-            batch_segs = target_segs[i:i + batch_size]
-            batch_seg_data = [
-                {"id": s.id, "segment_number": s.segment_number, "source_text": s.source_text}
-                for s in batch_segs
-            ]
+        async with async_session() as apply_session:
+            for i in range(0, len(target_segs), batch_size):
+                batch_segs = target_segs[i:i + batch_size]
+                batch_seg_data = [
+                    {"id": s.id, "segment_number": s.segment_number, "source_text": s.source_text}
+                    for s in batch_segs
+                ]
 
-            batch_start = min(s.segment_number - 1 for s in batch_segs)
-            context = self._build_batch_context(
-                segments=segments,
-                batch_start=batch_start,
-                batch_size=len(batch_segs),
-                novel_context=novel_context,
-            )
-            context["qa_applied"] = True
+                batch_start = min(s.segment_number - 1 for s in batch_segs)
+                context = self._build_batch_context(
+                    segments=segments,
+                    batch_start=batch_start,
+                    batch_size=len(batch_segs),
+                    novel_context=novel_context,
+                )
+                context["qa_applied"] = True
 
-            prompt = self.translator.prompt_builder.build_batch_prompt(
-                batch_segments=batch_seg_data, context=context,
-            )
+                prompt = self.translator.prompt_builder.build_batch_prompt(
+                    batch_segments=batch_seg_data, context=context,
+                )
 
-            translated = await self.translator.translate(
-                text=prompt, context=context, is_batch=True,
-            )
-            parsed = self._parse_batch_response(translated, batch_seg_data)
+                translated = await self.translator.translate(
+                    text=prompt, context=context, is_batch=True,
+                )
+                parsed = self._parse_batch_response(translated, batch_seg_data)
 
-            for seg in batch_segs:
-                translation = parsed.get(seg.segment_number, "")
-
-                async with async_session() as session:
-                    db_seg = await session.get(Segment, seg.id)
+                for seg in batch_segs:
+                    translation = parsed.get(seg.segment_number, "")
+                    db_seg = await apply_session.get(Segment, seg.id)
                     if db_seg:
                         db_seg.translation = translation or db_seg.translation
                         db_seg.status = "needs_review"
                         db_seg.has_qa = False
-                        await session.commit()
 
-                reapplied.append({
-                    "id": seg.id, "segment_number": seg.segment_number,
-                    "source_text": seg.source_text,
-                    "translation": translation or seg.translation,
-                    "status": "needs_review",
-                })
+                    reapplied.append({
+                        "id": seg.id, "segment_number": seg.segment_number,
+                        "source_text": seg.source_text,
+                        "translation": translation or seg.translation,
+                        "status": "needs_review",
+                    })
 
+            await apply_session.commit()
         return {"segments": reapplied, "applied": len(reapplied)}
 
     def _parse_batch_response(self, response: str, batch_segments: list) -> dict:
@@ -403,6 +480,8 @@ class ChapterTranslator:
                 text = parts[i] if i < len(parts) else ""
                 if text:
                     result[seg_num] = text
+        if not result:
+            log.warning(f"Failed to parse LLM response for batch of {len(batch_segments)} segments. Response: {response[:200]}")
         return result
 
     def _build_batch_context(self, segments: list, batch_start: int, batch_size: int, novel_context: dict) -> dict:

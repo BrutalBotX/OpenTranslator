@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { BookOpen, Save, Loader2, ChevronDown, ChevronRight, Eye } from 'lucide-react'
+import { BookOpen, Save, Loader2, ChevronDown, ChevronRight, Eye, BookMarked, Trash2 } from 'lucide-react'
 import { api } from '../services/apiClient'
 
 interface InstructionBoxProps {
@@ -17,6 +17,9 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
   const [showPreview, setShowPreview] = useState(false)
   const [preview, setPreview] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [presets, setPresets] = useState<string[]>([])
+  const [presetName, setPresetName] = useState('')
+  const [showPresets, setShowPresets] = useState(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => {
@@ -32,6 +35,15 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
       .finally(() => setLoading(false))
   }, [novelId])
 
+  const loadPresets = async () => {
+    try {
+      const data = await api.get<{ presets: { name: string; instructions: string }[] }>('/projects/presets')
+      setPresets(data.presets.map(p => p.name))
+    } catch {}
+  }
+
+  useEffect(() => { if (showPresets) loadPresets() }, [showPresets])
+
   const handleSave = async () => {
     if (!novelId) return
     setSaving(true)
@@ -43,6 +55,31 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
       saveTimer.current = setTimeout(() => setSaved(false), 3000)
     } catch (e) { console.error('Failed to save instructions', e) }
     setSaving(false)
+  }
+
+  const applyPreset = async (name: string) => {
+    try {
+      const data = await api.get<{ presets: { name: string; instructions: string }[] }>('/projects/presets')
+      const preset = data.presets.find(p => p.name === name)
+      if (preset) setText(preset.instructions)
+      setShowPresets(false)
+    } catch {}
+  }
+
+  const saveAsPreset = async () => {
+    if (!presetName.trim() || !text.trim()) return
+    try {
+      await api.post('/projects/presets', { name: presetName.trim(), instructions: text })
+      setPresetName('')
+      loadPresets()
+    } catch {}
+  }
+
+  const deletePreset = async (name: string) => {
+    try {
+      await api.delete(`/projects/presets/${encodeURIComponent(name)}`)
+      loadPresets()
+    } catch {}
   }
 
   const buildPreview = async () => {
@@ -95,19 +132,26 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
   return (
     <div className="h-full flex flex-col">
       <button onClick={() => setCollapsed(!collapsed)}
-        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors shrink-0">
+        className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-gray-500 hover:text-gray-300 transition-colors shrink-0">
         {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
         <BookOpen size={12} />
         <span>Instructions</span>
-        {savedText && <span className="text-cyan-500">(active)</span>}
-        {cmdCount > 0 && <span className="text-cyan-500">· {cmdCount} cmd{cmdCount > 1 ? 's' : ''}</span>}
-        {hasChanges && <span className="text-yellow-500">(unsaved)</span>}
-        {!collapsed && savedText && (
-          <span className="ml-auto">
-            <button onClick={(e) => { e.stopPropagation(); setShowPreview(!showPreview); if (!showPreview) buildPreview() }}
-              className={`flex items-center gap-1 text-xs transition-colors ${showPreview ? 'text-cyan-400' : 'text-gray-500 hover:text-gray-300'}`}>
-              <Eye size={12} /> {showPreview ? 'Hide' : 'View prompt'}
+        {savedText && <span className="text-cyan-500 ml-0.5">· active</span>}
+        {hasChanges && <span className="text-yellow-500 ml-0.5">· unsaved</span>}
+        {!collapsed && (
+          <span className="ml-auto flex items-center gap-1">
+            <button onClick={(e) => { e.stopPropagation(); setShowPresets(!showPresets) }}
+              title="Save or load instruction presets"
+              className={`px-1.5 py-0.5 rounded text-xs transition-colors ${showPresets ? 'text-cyan-400 bg-cyan-900/30' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+              <BookMarked size={11} className="inline mr-0.5" />Presets
             </button>
+            {savedText && (
+              <button onClick={(e) => { e.stopPropagation(); setShowPreview(!showPreview); }}
+                title="Preview the full prompt sent to the LLM"
+                className={`px-1.5 py-0.5 rounded text-xs transition-colors ${showPreview ? 'text-cyan-400 bg-cyan-900/30' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+                <Eye size={11} className="inline mr-0.5" />{showPreview ? 'Hide' : 'Prompt'}
+              </button>
+            )}
           </span>
         )}
       </button>
@@ -121,6 +165,28 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
                 <pre className="flex-1 bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-xs leading-relaxed text-gray-300 font-mono overflow-auto whitespace-pre-wrap min-h-0">{preview || 'No data'}</pre>
               )}
             </div>
+          ) : showPresets ? (
+            <div className="flex-1 flex flex-col min-h-0 space-y-2">
+              <div className="flex gap-1">
+                <input type="text" value={presetName} onChange={e => setPresetName(e.target.value)}
+                  placeholder="Preset name..."
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-cyan-600" />
+                <button onClick={saveAsPreset} disabled={!presetName.trim() || !text.trim()}
+                  className="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 rounded text-xs text-cyan-200">Save</button>
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-1">
+                {presets.length === 0 ? (
+                  <p className="text-xs text-gray-600 text-center py-4">No saved presets.</p>
+                ) : presets.map(name => (
+                  <div key={name} className="flex items-center gap-1 group">
+                    <button onClick={() => applyPreset(name)}
+                      className="flex-1 text-left px-2 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-300 transition-colors truncate">{name}</button>
+                    <button onClick={() => deletePreset(name)}
+                      className="p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={10} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : (
             <>
               {loading ? (
@@ -128,7 +194,7 @@ export default function InstructionBox({ novelId, chapterId }: InstructionBoxPro
               ) : (
                 <textarea value={text} onChange={e => setText(e.target.value)}
                   placeholder={'e.g. "Replace name Mara Minato with Shinra Minato"\nor "Keep surname first (Japanese order)"'}
-                  className="flex-1 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs leading-relaxed text-gray-200 focus:outline-none focus:border-cyan-600 min-h-0 resize-none overflow-auto font-mono" />
+                  className="flex-1 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm leading-relaxed text-gray-200 focus:outline-none focus:border-cyan-600 min-h-0 resize-none overflow-auto font-mono" />
               )}
               <div className="flex gap-1 mt-1.5 shrink-0">
                 <button onClick={handleSave} disabled={saving || !hasChanges}

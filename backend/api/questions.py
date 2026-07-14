@@ -127,7 +127,6 @@ async def _apply_answer_to_db(item: QAItem, answer: str, session: AsyncSession):
                             status="Alive",
                         )
                         session.add(char)
-            await session.commit()
             return
 
         glossary_match = re.search(r'(?:glossary|term|location|place|city|item|technique|weapon|artifact)', answer_lower)
@@ -151,7 +150,6 @@ async def _apply_answer_to_db(item: QAItem, answer: str, session: AsyncSession):
                             category=cat,
                         )
                         session.add(term)
-            await session.commit()
             return
 
         is_char = "character" in answer_lower or "male" in answer_lower or "female" in answer_lower
@@ -169,7 +167,7 @@ async def _apply_answer_to_db(item: QAItem, answer: str, session: AsyncSession):
 
         if is_char or (gender and not is_place and not is_item):
             existing = await session.execute(
-                select(Character).where(Character.novel_id == novel_id, Character.name == detected_name)
+                select(Character).where(Character.novel_id == novel_id, Character.name.ilike(detected_name))
             )
             existing_char = existing.scalar_one_or_none()
             if existing_char:
@@ -189,7 +187,7 @@ async def _apply_answer_to_db(item: QAItem, answer: str, session: AsyncSession):
         elif is_place or is_item:
             cat = "Place" if is_place else "Item"
             existing = await session.execute(
-                select(GlossaryTerm).where(GlossaryTerm.novel_id == novel_id, GlossaryTerm.source_term == detected_name)
+                select(GlossaryTerm).where(GlossaryTerm.novel_id == novel_id, GlossaryTerm.source_term.ilike(detected_name))
             )
             if not existing.scalar_one_or_none():
                 term = GlossaryTerm(
@@ -212,7 +210,7 @@ async def _apply_answer_to_db(item: QAItem, answer: str, session: AsyncSession):
                     gender = "Male" if "male" in answer_lower else "Female" if "female" in answer_lower else None
                     if gender:
                         existing = await session.execute(
-                            select(Character).where(Character.novel_id == ch.novel_id, Character.name == name)
+                            select(Character).where(Character.novel_id == ch.novel_id, Character.name.ilike(name))
                         )
                         char = existing.scalar_one_or_none()
                         if char:
@@ -229,6 +227,7 @@ async def answer_question(question_id: str, data: AnswerRequest, session: AsyncS
     item.answer = data.answer
     item.resolved = True
     await _apply_answer_to_db(item, data.answer, session)
+    await session.commit()
     await session.refresh(item)
     return item
 
@@ -302,6 +301,8 @@ async def batch_answer_questions(data: BatchAnswerRequest, session: AsyncSession
     for item in items:
         item.answer = data.answer
         item.resolved = True
+        if item.question_type in ("Name", "Cultural"):
+            await _apply_answer_to_db(item, data.answer, session)
 
     await session.commit()
     return {"answered": len(items)}
@@ -354,4 +355,5 @@ async def batch_answer_and_classify(data: BatchAnswerRequest, session: AsyncSess
         item.resolved = True
         await _apply_answer_to_db(item, data.answer, session)
 
+    await session.commit()
     return {"answered": len(items)}

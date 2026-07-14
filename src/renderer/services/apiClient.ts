@@ -7,14 +7,15 @@ async function apiFetch<T = any>(path: string, options?: RequestInit, timeoutMs 
   if (hasIpc) {
     const method = options?.method || 'GET'
     const body = options?.body ? JSON.parse(options.body as string) : undefined
-    const result = await window.electronAPI.fetch(path, { method, body })
+    const signal = options?.signal
+    const result = await window.electronAPI.fetch(path, { method, body, _timeout: timeoutMs, _signal: !!signal })
     return result as T
   }
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(`${API_BASE}${path}`, { ...options, signal: controller.signal })
+    const res = await fetch(`${API_BASE}${path}`, { ...options, signal: options?.signal || controller.signal })
     clearTimeout(timeout)
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -29,11 +30,11 @@ async function apiFetch<T = any>(path: string, options?: RequestInit, timeoutMs 
 }
 
 export const api = {
-  get: <T = any>(path: string) => apiFetch<T>(path),
-  post: <T = any>(path: string, body?: any) =>
-    apiFetch<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }),
-  put: <T = any>(path: string, body?: any) =>
-    apiFetch<T>(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }),
-  delete: <T = any>(path: string) =>
-    apiFetch<T>(path, { method: 'DELETE' }),
+  get: <T = any>(path: string, signal?: AbortSignal) => apiFetch<T>(path, signal ? { signal } : undefined),
+  post: <T = any>(path: string, body?: any, signal?: AbortSignal) =>
+    apiFetch<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, ...(signal ? { signal } : {}) }),
+  put: <T = any>(path: string, body?: any, signal?: AbortSignal) =>
+    apiFetch<T>(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, ...(signal ? { signal } : {}) }),
+  delete: <T = any>(path: string, signal?: AbortSignal) =>
+    apiFetch<T>(path, { method: 'DELETE', ...(signal ? { signal } : {}) }),
 }

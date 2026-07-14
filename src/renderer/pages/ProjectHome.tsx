@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FolderOpen, Plus, FileText, Trash2, Loader2, AlertTriangle, AlertCircle, X } from 'lucide-react'
+import { FolderOpen, Plus, FileText, Trash2, Loader2, AlertTriangle, AlertCircle, X, Pencil } from 'lucide-react'
 import { useProjectStore, Novel } from '../stores/projectStore'
 import { useStatusStore } from '../stores/statusStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { api } from '../services/apiClient'
 
 const DOCS = 'http://127.0.0.1:8712/api'
 
@@ -18,6 +19,8 @@ export default function ProjectHome() {
   const [deleteTarget, setDeleteTarget] = useState<Novel | null>(null)
   const [customPath, setCustomPath] = useState(false)
   const [projectPath, setProjectPath] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   useEffect(() => {
     if (backendStatus === 'connected') fetchProjects()
@@ -119,10 +122,35 @@ export default function ProjectHome() {
         ) : (
           <div className="grid gap-3">
             {projects.map((p: Novel) => (
-              <div key={p.id} onClick={() => openProject(p.id)}
+              <div key={p.id} onClick={() => !renamingId && openProject(p.id)}
                 className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800 hover:border-gray-700 cursor-pointer transition-colors group">
-                <div>
-                  <h3 className="font-medium">{p.title}</h3>
+                <div className="flex-1 min-w-0">
+                  {renamingId === p.id ? (
+                    <input type="text" value={renameValue} autoFocus
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={async e => {
+                        if (e.key === 'Enter' && renameValue.trim()) {
+                          try { await api.put(`/projects/${p.id}`, { title: renameValue.trim() }); await fetchProjects() } catch {}
+                          setRenamingId(null)
+                        } else if (e.key === 'Escape') {
+                          setRenamingId(null)
+                        }
+                        e.stopPropagation()
+                      }}
+                      onBlur={() => {
+                        setRenamingId(null)
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      className="w-full bg-gray-800 border border-cyan-600 rounded px-2 py-1 text-sm font-medium focus:outline-none" />
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium truncate">{p.title}</h3>
+                      <button onClick={e => { e.stopPropagation(); setRenameValue(p.title); setRenamingId(p.id) }}
+                        className="p-1 text-gray-600 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-all">
+                        <Pencil size={12} />
+                      </button>
+                    </div>
+                  )}
                   <p className="text-sm text-gray-500 mt-0.5">
                     {p.source_lang.toUpperCase()} → {p.target_lang.toUpperCase()}
                     {p.genre ? ` · ${p.genre}` : ''}

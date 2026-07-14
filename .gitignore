@@ -21,6 +21,10 @@ venv/
 data/
 *.db
 *.sqlite
+*.novelproj
+
+# Runtime
+logs/
 
 # ChromaDB
 .chromadb/
@@ -45,3 +49,7 @@ release/
 # OS
 .DS_Store
 Thumbs.db
+
+#Others
+RULES.md
+CHECKLIST.md

@@ -4,11 +4,14 @@ from fastapi import APIRouter
 router = APIRouter()
 
 _init_status = {"chromadb": "pending", "error": None}
+_init_tasks: set[asyncio.Task] = set()
 
 
 def trigger_chromadb_init():
     """Called from main.py startup to begin background init."""
-    asyncio.create_task(_init_chromadb())
+    task = asyncio.create_task(_init_chromadb())
+    _init_tasks.add(task)
+    task.add_done_callback(_init_tasks.discard)
 
 
 async def _init_chromadb():

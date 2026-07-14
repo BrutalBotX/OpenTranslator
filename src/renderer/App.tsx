@@ -9,7 +9,7 @@ import CharactersPanel from './pages/CharactersPanel'
 import GlossaryPanel from './pages/GlossaryPanel'
 import QAPanel from './pages/QAPanel'
 import SettingsPage from './pages/SettingsPage'
-import { useStatusStore } from './stores/statusStore'
+import { useStatusStore, BackendStatus } from './stores/statusStore'
 import { api } from './services/apiClient'
 
 function NoProjectMessage({ label }: { label: string }) {
@@ -43,19 +43,22 @@ export default function App() {
   useEffect(() => {
     if (!window.electronAPI?.onBackendStatus) {
       window.electronAPI?.getBackendStatus?.().then(data => {
-        setBackendStatus(data.status as any, data.error || undefined)
+        const s: BackendStatus = data.status === 'connected' ? 'connected' : data.status === 'error' ? 'error' : 'connecting'
+        setBackendStatus(s, data.error || undefined)
       })
       return
     }
     const unsub = window.electronAPI.onBackendStatus(data => {
-      setBackendStatus(data.status as any, data.error || undefined)
+      const s: BackendStatus = data.status === 'connected' ? 'connected' : data.status === 'error' ? 'error' : 'connecting'
+      setBackendStatus(s, data.error || undefined)
       if (data.status === 'connected') {
         fetchVersion()
         pollModelInit()
       }
     })
     window.electronAPI.getBackendStatus().then(data => {
-      setBackendStatus(data.status as any, data.error || undefined)
+      const s: BackendStatus = data.status === 'connected' ? 'connected' : data.status === 'error' ? 'error' : 'connecting'
+      setBackendStatus(s, data.error || undefined)
       if (data.status === 'connected') fetchVersion()
     })
     return () => {

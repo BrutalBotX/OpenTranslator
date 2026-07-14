@@ -63,13 +63,19 @@ def parse_instruction(instruction: str) -> list[dict]:
     return results
 
 
-async def apply_instruction_actions(actions: list[dict], novel_id: str):
+async def apply_instruction_actions(actions: list[dict], novel_id: str, session=None):
     from sqlalchemy import select
     from backend.db.database import async_session
     from backend.db.models import Character, GlossaryTerm
 
-    async with async_session() as session:
-        for action in actions:
+    if session is None:
+        async with async_session() as session:
+            return await _apply_actions(session, actions, novel_id)
+    await _apply_actions(session, actions, novel_id)
+
+
+async def _apply_actions(session, actions: list[dict], novel_id: str):
+    for action in actions:
             if action["action"] == "replace_name":
                 existing = await session.execute(
                     select(Character).where(

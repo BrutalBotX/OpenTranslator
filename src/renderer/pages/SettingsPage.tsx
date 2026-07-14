@@ -299,6 +299,43 @@ export default function SettingsPage() {
                 )
               })()}
             </div>
+
+            <div className="p-4 bg-gray-900 rounded-lg border border-gray-800 max-w-md">
+              {(() => {
+                const k = 'auto_backup_interval'
+                const field = meta[k]
+                if (!field) return null
+                const raw = values[k] ?? '0'
+                const val = parseInt(raw, 10) || 0
+                const options = field.options as string[] | undefined
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs text-gray-500">{field.label}</label>
+                      <span className="text-sm font-mono px-2 py-0.5 rounded text-cyan-300 bg-cyan-900/50">
+                        {val === 0 ? 'Off' : `Every ${val} chapter${val > 1 ? 's' : ''}`}
+                      </span>
+                    </div>
+                    {options && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {options.map(opt => {
+                          const num = parseInt(opt, 10)
+                          return (
+                            <button key={opt} onClick={() => setValue(k, opt)}
+                              className={`px-2.5 py-1 text-xs rounded transition-colors ${
+                                raw === opt ? 'bg-cyan-600/40 text-cyan-300 border border-cyan-700' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 border border-gray-700'
+                              }`}>
+                              {num === 0 ? 'Off' : num === 1 ? 'Every' : `Every ${num}`}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {field.description && <p className="text-xs text-gray-500 mt-2">{field.description}</p>}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         </section>
 

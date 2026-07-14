@@ -6,10 +6,14 @@ export function registerLLMHandlers(): void {
   ipcMain.handle('http:fetch', async (_event, endpoint: string, options?: any) => {
     const url = `${BACKEND_URL}${endpoint}`
     let response: Response | null = null
-    const timeoutMs = 300_000 // 5min — backend handles its own llm_timeout internally
+    const timeoutMs = options?._timeout || 300_000 // prefer per-request timeout, fallback to 5min
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
+    // If renderer provided an abort signal link, set up listener
+    if (options?._signal) {
+      _event.sender.on('abort-' + endpoint, () => { controller.abort() })
+    }
 
     try {
       response = await fetch(url, {

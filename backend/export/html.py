@@ -2,8 +2,9 @@ import html
 
 
 class HTMLExporter:
-    def export(self, title: str, chapters: list[dict], segments_by_chapter: list[list[dict]]) -> str:
+    def export(self, title: str, chapters: list[dict], segments_by_chapter: list[list[dict]], include_source: bool = False, show_numbers: bool = False) -> str:
         safe_title = html.escape(title)
+        source_style = "color:#888;font-style:italic;font-size:0.9em" if include_source else ""
         parts = [
             "<!DOCTYPE html>",
             '<html lang="en"><head>',
@@ -14,6 +15,8 @@ class HTMLExporter:
             "h1{text-align:center;font-size:2em;border-bottom:2px solid #333;padding-bottom:0.5em}",
             "h2{font-size:1.4em;margin-top:2em;color:#444}",
             "p{margin:0.3em 0;text-indent:2em}",
+            ".source{" + source_style + "}",
+            ".seg-num{color:#ccc;font-size:0.8em;font-family:monospace}",
             "</style></head><body>",
             f"<h1>{safe_title}</h1>",
         ]
@@ -27,8 +30,15 @@ class HTMLExporter:
 
             for seg in segments_by_chapter[i]:
                 translation = seg.get("translation", "").strip()
-                if translation:
-                    parts.append(f"<p>{html.escape(translation)}</p>")
+                if not translation:
+                    continue
+                seg_html = ""
+                if show_numbers:
+                    seg_html += f'<span class="seg-num">#{seg.get("segment_number", "")} </span>'
+                seg_html += f"<p>{html.escape(translation)}</p>"
+                if include_source:
+                    seg_html += f'<p class="source">{html.escape(seg.get("source_text", ""))}</p>'
+                parts.append(seg_html)
 
         parts.append("</body></html>")
         return "\n".join(parts)

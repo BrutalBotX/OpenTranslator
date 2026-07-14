@@ -18,7 +18,14 @@ def transliterate_zh(text: str) -> str:
     if not CJK_RANGE.search(text):
         return ""
     try:
-        return " ".join(lazy_pinyin(text, style=Style.TONE))
+        parts = re.split(r'([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+)', text)
+        result = []
+        for part in parts:
+            if CJK_RANGE.fullmatch(part):
+                result.append(" ".join(lazy_pinyin(part, style=Style.TONE)))
+            else:
+                result.append(part)
+        return "".join(result).strip()
     except Exception:
         return ""
 
@@ -73,15 +80,61 @@ def transliterate(text: str, source_lang: str) -> str:
     return ""
 
 
+_MALE_REASONS = {
+    "伟": "伟 (wěi — great/mighty)",
+    "强": "强 (qiáng — strong)",
+    "明": "明 (míng — bright)",
+    "龙": "龙 (lóng — dragon)",
+    "刚": "刚 (gāng — firm/steel)",
+    "浩": "浩 (hào — vast)",
+    "军": "军 (jūn — military)",
+    "勇": "勇 (yǒng — brave)",
+    "飞": "飞 (fēi — flying)",
+    "超": "超 (chāo — surpass)",
+    "杰": "杰 (jié — outstanding)",
+    "涛": "涛 (tāo — great wave)",
+    "斌": "斌 (bīn — refined/cultured)",
+    "磊": "磊 (lěi — open-hearted)",
+    "峰": "峰 (fēng — peak/mountain)",
+}
+_FEMALE_REASONS = {
+    "美": "美 (měi — beautiful)",
+    "丽": "丽 (lì — lovely)",
+    "芳": "芳 (fāng — fragrant)",
+    "娟": "娟 (juān — graceful)",
+    "静": "静 (jìng — serene/quiet)",
+    "琳": "琳 (lín — jade/gem)",
+    "婷": "婷 (tíng — graceful)",
+    "娜": "娜 (nà — elegant)",
+    "洁": "洁 (jié — pure/clean)",
+    "萍": "萍 (píng — duckweed/drifting)",
+    "雪": "雪 (xuě — snow)",
+    "瑶": "瑶 (yáo — precious jade)",
+    "玲": "玲 (líng — tinkling jade)",
+    "霞": "霞 (xiá — rosy clouds)",
+    "敏": "敏 (mǐn — quick/clever)",
+}
+
+
 def suggest_gender(name: str) -> str | None:
+    result = infer_gender(name)
+    return result["gender"] if result else None
+
+
+def infer_gender(name: str) -> dict | None:
+    """Returns {"gender": str, "reason": str} or None."""
     if not name or len(name) < 2:
         return None
-    if name in COMMON_SURNAMES or (len(name) <= 2 and name[0] in COMMON_SURNAMES):
+    if name in COMMON_SURNAMES:
         return None
     last_char = name[-1]
     last_two = name[-2:] if len(name) >= 2 else ""
-    if last_char in _FEMALE_INDICATORS or last_two in {"子", "儿"}:
-        return "Female"
+    if last_char in _FEMALE_INDICATORS:
+        hint = _FEMALE_REASONS.get(last_char, f"'{last_char}'")
+        return {"gender": "Female", "reason": f"Name ends with {hint} — common female indicator"}
+    if last_two in {"子", "儿"}:
+        return {"gender": "Female", "reason": f"Name ends with '{last_two}' — common feminine suffix"}
     if last_char in _MALE_INDICATORS:
-        return "Male"
+        hint = _MALE_REASONS.get(last_char, f"'{last_char}'")
+        return {"gender": "Male", "reason": f"Name ends with {hint} — common male indicator"}
     return None

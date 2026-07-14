@@ -7,6 +7,23 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
+.theme-light {
+  filter: invert(0.92) hue-rotate(180deg);
+  background: #f0f0f0;
+}
+
+.theme-light img,
+.theme-light video,
+.theme-light .no-invert,
+.theme-light svg,
+.theme-light [class*="lucide"],
+.theme-light [class*="icon"],
+.theme-light canvas,
+.theme-light iframe,
+.theme-light .theme-aware {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
 }

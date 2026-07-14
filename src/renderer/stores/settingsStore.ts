@@ -25,6 +25,8 @@ export interface SettingsState {
   fetchModels: (provider: string, baseUrl?: string, apiKey?: string) => Promise<void>
 }
 
+let _fetchModelsController: AbortController | null = null
+
 export const useSettingsStore = create<SettingsState>((set) => ({
   values: {},
   meta: {},
@@ -70,12 +72,15 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
 
   fetchModels: async (provider, baseUrl, apiKey) => {
+    if (_fetchModelsController) _fetchModelsController.abort()
+    const controller = new AbortController()
+    _fetchModelsController = controller
     set({ modelsLoading: true, modelsError: null })
     try {
       const params = new URLSearchParams({ provider })
       if (baseUrl) params.set('base_url', baseUrl)
       if (apiKey) params.set('api_key', apiKey)
-      const data = await api.get<{ models: { id: string; name: string }[]; error?: string }>(`/settings/models?${params}`)
+      const data = await api.get<{ models: { id: string; name: string }[]; error?: string }>(`/settings/models?${params}`, controller.signal)
       if (data.error) {
         set({ modelsLoading: false, modelsError: data.error, availableModels: [] })
       } else {

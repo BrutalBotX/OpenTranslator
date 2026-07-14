@@ -124,6 +124,44 @@ async def get_project(novel_id: str, session: AsyncSession = Depends(get_session
     )
 
 
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    genre: Optional[str] = None
+    source_lang: Optional[str] = None
+    target_lang: Optional[str] = None
+
+
+@router.put("/projects/{novel_id}", response_model=ProjectResponse)
+async def update_project(novel_id: str, data: ProjectUpdate, session: AsyncSession = Depends(get_session)):
+    novel = await session.get(Novel, novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if data.title is not None:
+        novel.title = data.title
+    if data.genre is not None:
+        novel.genre = data.genre
+    if data.source_lang is not None:
+        novel.source_lang = data.source_lang
+    if data.target_lang is not None:
+        novel.target_lang = data.target_lang
+    await session.commit()
+    await session.refresh(novel)
+    ch_count = await session.scalar(
+        select(func.count(Chapter.id)).where(Chapter.novel_id == novel.id)
+    )
+    return ProjectResponse(
+        id=novel.id,
+        title=novel.title,
+        source_lang=novel.source_lang,
+        target_lang=novel.target_lang,
+        genre=novel.genre or "",
+        summary=novel.summary or "",
+        chapter_count=ch_count or 0,
+        created_at=novel.created_at.isoformat() if novel.created_at else "",
+        updated_at=novel.updated_at.isoformat() if novel.updated_at else "",
+    )
+
+
 @router.delete("/projects/{novel_id}")
 async def delete_project(novel_id: str, session: AsyncSession = Depends(get_session)):
     novel = await session.get(Novel, novel_id)
@@ -151,15 +189,59 @@ async def save_instructions(novel_id: str, data: InstructionsRequest, session: A
     novel = await session.get(Novel, novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Project not found")
-    novel.instructions = data.instructions
-    await session.commit()
 
     from backend.utils.instructions import parse_instruction, apply_instruction_actions
+
+    # Save instructions text first, then apply actions in the same transaction
+    novel.instructions = data.instructions
+    await session.flush()
+
     actions = parse_instruction(data.instructions)
     if actions:
-        await apply_instruction_actions(actions, novel_id)
+        await apply_instruction_actions(actions, novel_id, session=session)
+
+    await session.commit()
 
     return {"saved": True, "actions_applied": len(actions)}
+
+
+class PresetRequest(BaseModel):
+    name: str
+    instructions: str
+
+
+@router.get("/projects/presets")
+async def list_presets(session: AsyncSession = Depends(get_session)):
+    from backend.db.models import Setting as SettingModel
+    result = await session.execute(
+        select(SettingModel).where(SettingModel.key.like("preset:%"))
+    )
+    presets = []
+    for row in result.scalars().all():
+        presets.append({"name": row.key.replace("preset:", ""), "instructions": row.value})
+    return {"presets": presets}
+
+
+@router.post("/projects/presets")
+async def save_preset(data: PresetRequest, session: AsyncSession = Depends(get_session)):
+    from backend.db.models import Setting as SettingModel
+    row = await session.get(SettingModel, f"preset:{data.name}")
+    if row:
+        row.value = data.instructions
+    else:
+        session.add(SettingModel(key=f"preset:{data.name}", value=data.instructions))
+    await session.commit()
+    return {"saved": True}
+
+
+@router.delete("/projects/presets/{name}")
+async def delete_preset(name: str, session: AsyncSession = Depends(get_session)):
+    from backend.db.models import Setting as SettingModel
+    row = await session.get(SettingModel, f"preset:{name}")
+    if row:
+        await session.delete(row)
+        await session.commit()
+    return {"deleted": True}
 
 
 @router.get("/projects/{novel_id}/export-proj")
@@ -313,17 +395,26 @@ async def import_chapter(data: ChapterImport, session: AsyncSession = Depends(ge
     else:
         chapter_number = data.number
 
+    if not data.title:
+        first_line = data.content.split("\n")[0].strip() if data.content else ""
+        import re as _re
+        m = _re.match(r'^(?:Chapter|CHAPTER|Ch\.|第[\u4e00-\u9fff]*(?:章|話|화))\s*\d*[：:\s]*(.+)$', first_line)
+        if m:
+            data.title = m.group(1).strip() or f"Chapter {chapter_number}"
+        else:
+            data.title = first_line[:50].strip() or f"Chapter {chapter_number}"
+
     chapter = Chapter(
         novel_id=data.novel_id,
         number=chapter_number,
-        title=data.title or f"Chapter {chapter_number}",
+        title=data.title,
         source_text=data.content,
         word_count=len(data.content),
     )
     session.add(chapter)
     await session.flush()
 
-    paragraphs = [p.strip() for p in data.content.split("\n") if p.strip()]
+    paragraphs = [p.strip() for p in data.content.splitlines() if p.strip()]
     for i, para in enumerate(paragraphs):
         segment = Segment(
             chapter_id=chapter.id,
@@ -491,6 +582,33 @@ async def summarize_chapter(chapter_id: str, session: AsyncSession = Depends(get
         return {"summary": "", "error": str(e), "chapter_title": chapter.title}
 
 
+class ChapterUpdate(BaseModel):
+    title: Optional[str] = None
+
+
+@router.put("/chapters/{chapter_id}", response_model=ChapterResponse)
+async def update_chapter(chapter_id: str, data: ChapterUpdate, session: AsyncSession = Depends(get_session)):
+    chapter = await session.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if data.title is not None:
+        chapter.title = data.title
+    await session.commit()
+    await session.refresh(chapter)
+    seg_count = await session.scalar(
+        select(func.count(Segment.id)).where(Segment.chapter_id == chapter.id)
+    )
+    return ChapterResponse(
+        id=chapter.id,
+        novel_id=chapter.novel_id,
+        number=chapter.number,
+        title=chapter.title,
+        translated=chapter.translated or False,
+        word_count=chapter.word_count or 0,
+        segment_count=seg_count or 0,
+    )
+
+
 @router.delete("/chapters/{chapter_id}")
 async def delete_chapter(chapter_id: str, session: AsyncSession = Depends(get_session)):
     chapter = await session.get(Chapter, chapter_id)
@@ -531,6 +649,68 @@ async def reapply_chapter(chapter_id: str, req: TranslateAllRequest, session: As
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.post("/projects/{novel_id}/reorder-chapters")
+async def reorder_chapters(novel_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+    chapter_ids = data.get("chapter_ids", [])
+    if not chapter_ids:
+        raise HTTPException(status_code=400, detail="chapter_ids required")
+    for idx, ch_id in enumerate(chapter_ids, 1):
+        ch = await session.get(Chapter, ch_id)
+        if ch and ch.novel_id == novel_id:
+            ch.number = idx
+    await session.commit()
+    return {"reordered": len(chapter_ids)}
+
+
+@router.get("/projects/{novel_id}/consistency-check")
+async def consistency_check(novel_id: str, session: AsyncSession = Depends(get_session)):
+    gloss_result = await session.execute(
+        select(GlossaryTerm).where(GlossaryTerm.novel_id == novel_id)
+    )
+    glossary = gloss_result.scalars().all()
+    if not glossary:
+        return {"issues": []}
+
+    ch_result = await session.execute(
+        select(Segment.translation, Chapter.number)
+        .select_from(Segment)
+        .join(Chapter, Segment.chapter_id == Chapter.id)
+        .where(Chapter.novel_id == novel_id, Segment.translation != "")
+    )
+    rows = ch_result.all()
+    all_text = " ".join(row[0] for row in rows)
+
+    issues = []
+    for g in glossary:
+        src = g.source_term
+        tgt = g.target_term
+        if src in all_text:
+            issues.append({
+                "type": "source_in_translation",
+                "term": src,
+                "expected": tgt,
+                "detail": f"Source term '{src}' appears in translated text — may not have been replaced with '{tgt}'",
+            })
+        counts = {}
+        for row in rows:
+            text = row[0]
+            if tgt.lower() in text.lower() or src.lower() in text.lower():
+                ch_num = row[1]
+                counts[ch_num] = counts.get(ch_num, 0) + 1
+
+        source_count = sum(1 for row in rows if src.lower() in row[0].lower())
+        target_count = sum(1 for row in rows if tgt.lower() in row[0].lower())
+        if source_count > target_count * 2 and target_count > 0:
+            issues.append({
+                "type": "inconsistent_usage",
+                "term": src,
+                "expected": tgt,
+                "detail": f"'{src}' used {source_count} times vs '{tgt}' {target_count} times in translations",
+            })
+
+    return {"issues": issues[:50]}
 
 
 @router.post("/chapters/{chapter_id}/check-status")

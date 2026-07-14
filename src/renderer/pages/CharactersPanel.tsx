@@ -13,6 +13,7 @@ interface Character {
   status: string
   state_summary: string
   transliteration?: string
+  gender_reason?: string
 }
 
 const GENDERS = ['Male', 'Female', 'Non-binary', 'Unknown']
@@ -131,8 +132,11 @@ export default function CharactersPanel() {
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2"><span className="font-medium">{c.name}</span>{c.transliteration && <span className="text-gray-500 text-xs italic">{c.transliteration}</span>}{c.name_variants.length > 0 && <span className="text-gray-500 text-sm">{c.name_variants.join(', ')}</span>}</div>
-                  <div className="flex gap-2 mt-1.5">
+                  <div className="flex gap-2 mt-1.5 items-center">
                     <span className={`text-xs px-2 py-0.5 rounded ${c.gender === 'Male' ? 'bg-blue-900/50 text-blue-300' : c.gender === 'Female' ? 'bg-pink-900/50 text-pink-300' : 'bg-gray-800 text-gray-400'}`}>{c.gender}</span>
+                    {c.gender_reason && c.gender !== 'Unknown' && (
+                      <span className="text-[10px] text-gray-600 italic" title={c.gender_reason}>auto-suggested</span>
+                    )}
                     <span className="text-xs px-2 py-0.5 bg-purple-900/50 text-purple-300 rounded">{c.role}</span>
                     <span className={`text-xs px-2 py-0.5 rounded ${c.status === 'Alive' ? 'bg-green-900/50 text-green-300' : c.status === 'Dead' ? 'bg-red-900/50 text-red-300' : 'bg-gray-800 text-gray-400'}`}>{c.status}</span>
                   </div>
