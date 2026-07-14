@@ -3,7 +3,7 @@
 **AI-powered webnovel translation workstation** — batch-translate Chinese, Japanese, and Korean webnovels into English with persistent character and glossary management.
 
 ![version](https://img.shields.io/badge/version-0.6.6-blue)
-![electron](https://img.shields.io/badge/electron-31.3-blue)
+![electron](https://img.shields.io/badge/electron-31.7-blue)
 ![python](https://img.shields.io/badge/python-3.11%2B-green)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -14,17 +14,19 @@
 - **15+ LLM providers** — Ollama (local), OpenAI, Anthropic, DeepSeek, Google Gemini, Groq, Mistral, Together, Perplexity, Cohere, OpenCode, xAI, OpenRouter, Fireworks, DeepInfra, custom endpoints
 - **Batch translation** — translate entire chapters at once with configurable batch size (1–10 segments per LLM call)
 - **Sliding window context** — each batch sees 3 previous + 3 upcoming segments for coherent flow
-- **Persistent character management** — auto-detect characters on import; alias tracking; gender/role/status fields
-- **Glossary** — ensure consistent terminology across chapters (cultivation terms, place names, techniques)
-- **QA Queue** — ambiguity detection flags pronouns, unknown names, idioms, cultural terms without blocking translation; batch-resolve in review phase
-- **Translator instructions** — per-project instruction box for name replacements ("Replace Mara Minato with Shinra Minato"), naming conventions ("Keep surname first"), style rules; commands auto-update character aliases
-- **Transliteration** — pinyin/romaji display in QA and review panels
+- **Persistent character management** — auto-detect characters on import; alias tracking; gender/role/status fields; transliteration display
+- **Glossary** — ensure consistent terminology across chapters (cultivation terms, place names, techniques); inline edit in context panel
+- **QA Queue** — ambiguity detection flags pronouns, unknown names, idioms, cultural terms without blocking translation; batch-resolve by type with one click
+- **Translator instructions** — per-project instruction box for name replacements ("Replace Mara Minato with Shinra Minato"), naming conventions ("Keep surname first"), style rules; commands auto-update character aliases and glossary
+- **Transliteration** — pinyin with accent marks (nǐ hǎo), Japanese romaji (pykakasi), Korean romanization
 - **Translation memory** — ChromaDB vector store finds similar past translations for style consistency
 - **Progress tracking** — real-time batch progress, segment count, LLM status during chapter translation; cancel button to abort mid-translation
 - **Resume support** — skips already-translated segments when re-translating a chapter
 - **Configurable timeout** — per-provider timeout setting (default 60s) prevents stuck translations
-- **Export** — plain text and HTML formats
-- **Review pane** — inline editing, accept/reset per segment, batch apply QA answers
+- **Export** — plain text, HTML, and EPUB formats with source/include options
+- **Review pane** — inline editing, diff view, search, accept/reset per segment, batch select, quality scoring
+- **Auto-backup** — automatic `.novelproj` saves at configurable chapter intervals
+- **Project/chapter rename** — inline click-to-edit on project cards and chapter list
 
 ---
 
@@ -81,6 +83,7 @@ npm run dev
 | Fallback Provider | Backup provider if primary fails | (none) |
 | Segments per LLM call | Batch size (1–10) | 4 |
 | LLM Timeout | Max seconds per LLM call | 60 |
+| Auto-backup interval | Save .novelproj every N chapters | Disabled |
 | Source Language | Novel source language | zh |
 | Target Language | Translation target | en |
 
@@ -200,7 +203,7 @@ npm run dist:win
 | Vector store | ChromaDB |
 | LLM routing | LiteLLM |
 | Translation | ChineseDetector, JapaneseDetector, KoreanDetector (regex-based ambiguity) |
-| Unicode | pypinyin (Chinese romanization) |
+| Unicode | pypinyin (Chinese), pykakasi (Japanese) |
 
 ---
 
